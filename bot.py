@@ -3,16 +3,14 @@ import logging
 import random
 import sqlite3
 import aiohttp
-import json
 from datetime import datetime, timedelta
-from typing import Optional, Dict, List
-from aiogram import Bot, Dispatcher, F, types
+from typing import Optional, Dict, List, Tuple
+from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import Message, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-from aiogram.filters.state import StateFilter
 
 # ================= КОНФИГУРАЦИЯ =================
 BOT_TOKEN = "8684125903:AAGlja8nj_r3HCb8aZwubOqJ_MAGDFAWCoc"
@@ -265,9 +263,9 @@ def update_daily_bonus(user_id: int):
 
 def can_claim_daily_bonus(user_id: int) -> bool:
     user = get_user(user_id)
-    if not user or not user[10]:  # last_daily_bonus
+    if not user or not user[9]:  # last_daily_bonus (индекс 9)
         return True
-    last_bonus = datetime.strptime(user[10], "%Y-%m-%d")
+    last_bonus = datetime.strptime(user[9], "%Y-%m-%d")
     return (datetime.now() - last_bonus).days >= 1
 
 def increment_task_count(user_id: int):
@@ -284,16 +282,16 @@ def increment_task_count(user_id: int):
     conn.commit()
     conn.close()
 
-def reset_daily_task_count():
-    """Сбрасывает счетчик заданий в начале нового дня"""
+def reset_daily_task_count_for_user(user_id: int):
+    """Сбрасывает счетчик заданий для конкретного пользователя"""
     conn = sqlite3.connect("bot_database.db")
     cursor = conn.cursor()
     today = datetime.now().strftime("%Y-%m-%d")
     cursor.execute("""
         UPDATE users 
         SET tasks_completed_today = 0
-        WHERE last_task_date != ?
-    """, (today,))
+        WHERE user_id = ? AND last_task_date != ?
+    """, (user_id, today))
     conn.commit()
     conn.close()
 
@@ -453,7 +451,7 @@ def format_game_result(emoji: str, value: int) -> str:
             return f"🎳 [{value}] - 🎳 Слабый бросок"
     return f"🎮 Результат: {value}"
 
-def get_user_level(total_tasks: int) -> tuple[str, int]:
+def get_user_level(total_tasks: int) -> Tuple[str, int]:
     """Возвращает уровень пользователя и прогресс до следующего"""
     levels = [
         (0, "🥉 Новичок"),
@@ -464,13 +462,15 @@ def get_user_level(total_tasks: int) -> tuple[str, int]:
     ]
     
     current_level = levels[0]
-    next_level = levels[1]
+    next_level = levels[1] if len(levels) > 1 else levels[0]
     
     for i, (threshold, name) in enumerate(levels):
         if total_tasks >= threshold:
             current_level = (threshold, name)
             if i + 1 < len(levels):
                 next_level = levels[i + 1]
+            else:
+                next_level = current_level
     
     progress = total_tasks - current_level[0]
     needed = next_level[0] - current_level[0]
@@ -539,7 +539,7 @@ async def cmd_start(message: Message):
 
     user = get_user(message.from_user.id)
     bot_info = await bot.get_me()
-    ref_link = f"https://t.me/{bot_info.username}?start=ref_{user[4]}"
+    ref_link = f"https://t.me/{bot_info.username}?start=ref_{user[5]}"  # referral_code
     rate = int(get_setting("exchange_rate"))
     level, progress = get_user_level(user[12])  # total_tasks_completed
     
@@ -548,8 +548,8 @@ async def cmd_start(message: Message):
         f"📊 <b>Ваш профиль:</b>\n"
         f"🎖 Уровень: {level} ({progress}%)\n\n"
         f"💰 <b>Баланс:</b>\n"
-        f"⭐️ Звезды: <code>{format_number(user[2])}</code>\n"
-        f"🪙 T Coin: <code>{format_number(user[3])}</code>\n\n"
+        f"⭐️ Звезды: <code>{format_number(user[3])}</code>\n"
+        f"🪙 T Coin: <code>{format_number(user[4])}</code>\n\n"
         f"📈 <b>Статистика:</b>\n"
         f"✅ Выполнено заданий: {user[12]}\n"
         f"👥 Приглашено друзей: {user[13]}\n\n"
@@ -559,15 +559,15 @@ async def cmd_start(message: Message):
     )
     
     builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text="📋 Взять задание", callback_data="task_get", style="primary"))
-    builder.row(InlineKeyboardButton(text="🎁 Ежедневный бонус", callback_data="daily_bonus", style="success"))
-    builder.row(InlineKeyboardButton(text="🔄 Обмен валют", callback_data="exchange", style="primary"))
-    builder.row(InlineKeyboardButton(text="🎮 Игры (10 видов)", callback_data="games_menu", style="success"))
-    builder.row(InlineKeyboardButton(text="🎟 Промокод", callback_data="promo_enter", style="primary"))
-    builder.row(InlineKeyboardButton(text="📊 История транзакций", callback_data="transactions", style="primary"))
+    builder.row(InlineKeyboardButton(text="📋 Взять задание", callback_data="task_get"))
+    builder.row(InlineKeyboardButton(text="🎁 Ежедневный бонус", callback_data="daily_bonus"))
+    builder.row(InlineKeyboardButton(text="🔄 Обмен валют", callback_data="exchange"))
+    builder.row(InlineKeyboardButton(text="🎮 Игры (10 видов)", callback_data="games_menu"))
+    builder.row(InlineKeyboardButton(text="🎟 Промокод", callback_data="promo_enter"))
+    builder.row(InlineKeyboardButton(text="📊 История транзакций", callback_data="transactions"))
     
-    if user[6]:  # is_admin
-        builder.row(InlineKeyboardButton(text="👑 Админ-панель", callback_data="admin", style="danger"))
+    if user[7]:  # is_admin
+        builder.row(InlineKeyboardButton(text="👑 Админ-панель", callback_data="admin"))
     
     await message.answer(text, parse_mode="HTML", reply_markup=builder.as_markup())
 # =================================================
@@ -594,12 +594,12 @@ async def cmd_daily_bonus(callback: CallbackQuery):
         )
         
         builder = InlineKeyboardBuilder()
-        builder.row(InlineKeyboardButton(text="🔙 В меню", callback_data="back_to_menu", style="primary"))
+        builder.row(InlineKeyboardButton(text="🔙 В меню", callback_data="back_to_menu"))
         
         await callback.message.edit_text(text, parse_mode="HTML", reply_markup=builder.as_markup())
     else:
         user = get_user(callback.from_user.id)
-        last_bonus = datetime.strptime(user[10], "%Y-%m-%d")
+        last_bonus = datetime.strptime(user[9], "%Y-%m-%d")  # last_daily_bonus
         next_bonus = last_bonus + timedelta(days=1)
         time_left = next_bonus - datetime.now()
         hours = time_left.seconds // 3600
@@ -613,7 +613,7 @@ async def cmd_daily_bonus(callback: CallbackQuery):
         )
         
         builder = InlineKeyboardBuilder()
-        builder.row(InlineKeyboardButton(text="🔙 В меню", callback_data="back_to_menu", style="primary"))
+        builder.row(InlineKeyboardButton(text="🔙 В меню", callback_data="back_to_menu"))
         
         await callback.message.edit_text(text, parse_mode="HTML", reply_markup=builder.as_markup())
 # =================================================
@@ -630,7 +630,7 @@ async def cmd_promo_enter(callback: CallbackQuery, state: FSMContext):
     )
     
     builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text="❌ Отмена", callback_data="back_to_menu", style="danger"))
+    builder.row(InlineKeyboardButton(text="❌ Отмена", callback_data="back_to_menu"))
     
     await callback.message.edit_text(text, parse_mode="HTML", reply_markup=builder.as_markup())
     await state.set_state(UserStates.waiting_for_promo_input)
@@ -679,7 +679,7 @@ async def process_promo_code(message: Message, state: FSMContext):
         text += f"🪙 +{tcoin_reward} T Coin\n"
     
     builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text="🔙 В меню", callback_data="back_to_menu", style="primary"))
+    builder.row(InlineKeyboardButton(text="🔙 В меню", callback_data="back_to_menu"))
     
     await message.answer(text, parse_mode="HTML", reply_markup=builder.as_markup())
 # =================================================
@@ -705,7 +705,7 @@ async def cmd_transactions(callback: CallbackQuery):
             text += f"   <code>{date}</code>\n\n"
     
     builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text="🔙 В меню", callback_data="back_to_menu", style="primary"))
+    builder.row(InlineKeyboardButton(text="🔙 В меню", callback_data="back_to_menu"))
     
     await callback.message.edit_text(text, parse_mode="HTML", reply_markup=builder.as_markup())
 # =================================================
@@ -720,17 +720,17 @@ async def cmd_task_get(callback: CallbackQuery):
     # Проверка лимита заданий в день
     today = datetime.now().strftime("%Y-%m-%d")
     if user[11] != today:  # last_task_date != today
-        reset_daily_task_count()
+        reset_daily_task_count_for_user(callback.from_user.id)
         user = get_user(callback.from_user.id)
     
-    if user[9] >= MAX_TASKS_PER_DAY:  # tasks_completed_today
+    if user[10] >= MAX_TASKS_PER_DAY:  # tasks_completed_today
         text = (
             f"⏰ <b>Лимит заданий на сегодня исчерпан!</b>\n\n"
             f"Вы выполнили {MAX_TASKS_PER_DAY} заданий.\n"
             f"Возвращайтесь завтра!"
         )
         builder = InlineKeyboardBuilder()
-        builder.row(InlineKeyboardButton(text="🔙 В меню", callback_data="back_to_menu", style="primary"))
+        builder.row(InlineKeyboardButton(text="🔙 В меню", callback_data="back_to_menu"))
         await callback.message.edit_text(text, parse_mode="HTML", reply_markup=builder.as_markup())
         return
     
@@ -749,15 +749,15 @@ async def cmd_task_get(callback: CallbackQuery):
         )
         
         builder = InlineKeyboardBuilder()
-        builder.row(InlineKeyboardButton(text="🔗 Подписаться", url=link, style="primary"))
-        builder.row(InlineKeyboardButton(text="✅ Проверить подписку", callback_data="task_check", style="success"))
-        builder.row(InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu", style="danger"))
+        builder.row(InlineKeyboardButton(text="🔗 Подписаться", url=link))
+        builder.row(InlineKeyboardButton(text="✅ Проверить подписку", callback_data="task_check"))
+        builder.row(InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu"))
         
         await callback.message.edit_text(text, parse_mode="HTML", reply_markup=builder.as_markup())
     else:
         text = "🎉 <b>На данный момент заданий нет.</b>\n\nЗагляните позже!"
         builder = InlineKeyboardBuilder()
-        builder.row(InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu", style="primary"))
+        builder.row(InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu"))
         await callback.message.edit_text(text, parse_mode="HTML", reply_markup=builder.as_markup())
 
 @dp.callback_query(F.data == "task_check")
@@ -789,14 +789,14 @@ async def cmd_task_check(callback: CallbackQuery):
             text = (
                 f"✅ <b>Отлично!</b>\n\n"
                 f"Вам начислено <b>{reward} ⭐️</b>!\n\n"
-                f"📊 Выполнено заданий сегодня: {user[9]}/{MAX_TASKS_PER_DAY}\n"
+                f"📊 Выполнено заданий сегодня: {user[10]}/{MAX_TASKS_PER_DAY}\n"
                 f"📈 Всего выполнено: {user[12]}"
             )
             
             builder = InlineKeyboardBuilder()
-            if user[9] < MAX_TASKS_PER_DAY:
-                builder.row(InlineKeyboardButton(text="📋 Следующее задание", callback_data="task_get", style="success"))
-            builder.row(InlineKeyboardButton(text="🔙 В меню", callback_data="back_to_menu", style="primary"))
+            if user[10] < MAX_TASKS_PER_DAY:
+                builder.row(InlineKeyboardButton(text="📋 Следующее задание", callback_data="task_get"))
+            builder.row(InlineKeyboardButton(text="🔙 В меню", callback_data="back_to_menu"))
             
             await callback.message.edit_text(text, parse_mode="HTML", reply_markup=builder.as_markup())
         else:
@@ -812,12 +812,12 @@ async def cmd_exchange(callback: CallbackQuery):
     
     user = get_user(callback.from_user.id)
     rate = int(get_setting("exchange_rate"))
-    available_tcoin = user[2] // rate
+    available_tcoin = user[3] // rate  # stars_balance
     
     text = (
         f"🔄 <b>Обмен Звезд на T Coin</b>\n\n"
         f"💱 <b>Курс:</b> <code>{rate} ⭐️ = 1 🪙</code>\n\n"
-        f"⭐️ Ваш баланс: <code>{format_number(user[2])}</code>\n"
+        f"⭐️ Ваш баланс: <code>{format_number(user[3])}</code>\n"
         f"🪙 Доступно для обмена: <code>{format_number(available_tcoin)}</code>"
     )
     
@@ -825,10 +825,9 @@ async def cmd_exchange(callback: CallbackQuery):
     if available_tcoin > 0:
         builder.row(InlineKeyboardButton(
             text=f"🔄 Обменять всё ({available_tcoin} 🪙)",
-            callback_data=f"do_exchange_{available_tcoin}",
-            style="success"
+            callback_data=f"do_exchange_{available_tcoin}"
         ))
-    builder.row(InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu", style="primary"))
+    builder.row(InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu"))
     
     await callback.message.edit_text(text, parse_mode="HTML", reply_markup=builder.as_markup())
 
@@ -841,7 +840,7 @@ async def cmd_do_exchange(callback: CallbackQuery):
     rate = int(get_setting("exchange_rate"))
     stars_to_deduct = amount * rate
     
-    if user[2] >= stars_to_deduct:
+    if user[3] >= stars_to_deduct:  # stars_balance
         update_balance(
             callback.from_user.id,
             stars=-stars_to_deduct,
@@ -854,12 +853,12 @@ async def cmd_do_exchange(callback: CallbackQuery):
             f"📉 Списано: {stars_to_deduct} ⭐️\n"
             f"📈 Начислено: {amount} 🪙\n\n"
             f"💰 Новый баланс:\n"
-            f"⭐️ {user[2] - stars_to_deduct}\n"
-            f"🪙 {user[3] + amount}"
+            f"⭐️ {user[3] - stars_to_deduct}\n"
+            f"🪙 {user[4] + amount}"
         )
         
         builder = InlineKeyboardBuilder()
-        builder.row(InlineKeyboardButton(text="🔙 В меню", callback_data="back_to_menu", style="primary"))
+        builder.row(InlineKeyboardButton(text="🔙 В меню", callback_data="back_to_menu"))
         
         await callback.message.edit_text(text, parse_mode="HTML", reply_markup=builder.as_markup())
     else:
@@ -888,7 +887,7 @@ async def cmd_games_menu(callback: CallbackQuery):
     )
     
     builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu", style="primary"))
+    builder.row(InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu"))
     
     await callback.message.edit_text(text, parse_mode="HTML", reply_markup=builder.as_markup())
 
@@ -950,7 +949,7 @@ async def play_game(message: Message):
         await message.answer("❌ Ставка должна быть больше 0!")
         return
     
-    if user[3] < bet:
+    if user[4] < bet:  # tcoin_balance
         await message.answer("❌ Недостаточно T Coin!")
         return
     
@@ -994,7 +993,7 @@ async def play_game(message: Message):
 @dp.callback_query(F.data == "admin")
 async def cmd_admin(callback: CallbackQuery):
     user = get_user(callback.from_user.id)
-    if not user or not user[6]:
+    if not user or not user[7]:  # is_admin
         await callback.answer("❌ Нет прав!", show_alert=True)
         return
     
@@ -1035,14 +1034,14 @@ async def cmd_admin(callback: CallbackQuery):
     )
     
     builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu", style="primary"))
+    builder.row(InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu"))
     
     await callback.message.edit_text(text, parse_mode="HTML", reply_markup=builder.as_markup())
 
 @dp.message(Command("broadcast"))
 async def cmd_broadcast(message: Message, state: FSMContext):
     user = get_user(message.from_user.id)
-    if not user or not user[6]:
+    if not user or not user[7]:  # is_admin
         return
     
     await message.answer("📢 Отправьте сообщение для рассылки всем пользователям:")
@@ -1076,7 +1075,7 @@ async def process_broadcast(message: Message, state: FSMContext):
 @dp.message(Command("ban", "unban"))
 async def cmd_ban(message: Message):
     user = get_user(message.from_user.id)
-    if not user or not user[6]:
+    if not user or not user[7]:  # is_admin
         return
     
     args = message.text.split()
@@ -1102,7 +1101,7 @@ async def cmd_ban(message: Message):
 @dp.message(Command("createpromo"))
 async def cmd_createpromo(message: Message):
     user = get_user(message.from_user.id)
-    if not user or not user[6]:
+    if not user or not user[7]:  # is_admin
         return
     
     args = message.text.split()
@@ -1136,7 +1135,7 @@ async def cmd_createpromo(message: Message):
 @dp.message(Command("togglebot"))
 async def cmd_togglebot(message: Message):
     user = get_user(message.from_user.id)
-    if not user or not user[6]:
+    if not user or not user[7]:  # is_admin
         return
     
     current = get_setting("bot_active")
@@ -1149,7 +1148,7 @@ async def cmd_togglebot(message: Message):
 @dp.message(Command("maintenance"))
 async def cmd_maintenance(message: Message):
     user = get_user(message.from_user.id)
-    if not user or not user[6]:
+    if not user or not user[7]:  # is_admin
         return
     
     current = get_setting("maintenance_mode")
@@ -1162,7 +1161,7 @@ async def cmd_maintenance(message: Message):
 @dp.message(Command("userstats"))
 async def cmd_userstats(message: Message):
     user = get_user(message.from_user.id)
-    if not user or not user[6]:
+    if not user or not user[7]:  # is_admin
         return
     
     args = message.text.split()
@@ -1190,14 +1189,14 @@ async def cmd_userstats(message: Message):
         f"👤 Имя: {target_user[2]}\n"
         f"🎖 Уровень: {level} ({progress}%)\n\n"
         f"💰 <b>Баланс:</b>\n"
-        f"⭐️ Звезды: {format_number(target_user[2])}\n"
-        f"🪙 T Coin: {format_number(target_user[3])}\n\n"
+        f"⭐️ Звезды: {format_number(target_user[3])}\n"
+        f"🪙 T Coin: {format_number(target_user[4])}\n\n"
         f"📈 <b>Активность:</b>\n"
         f"✅ Выполнено заданий: {target_user[12]}\n"
-        f"📅 Заданий сегодня: {target_user[9]}/{MAX_TASKS_PER_DAY}\n"
+        f"📅 Заданий сегодня: {target_user[10]}/{MAX_TASKS_PER_DAY}\n"
         f"👥 Приглашено друзей: {target_user[13]}\n\n"
         f"🚫 Заблокирован: {'Да' if target_user[8] else 'Нет'}\n"
-        f"👑 Админ: {'Да' if target_user[6] else 'Нет'}\n"
+        f"👑 Админ: {'Да' if target_user[7] else 'Нет'}\n"
         f"📅 Регистрация: {target_user[14]}"
     )
     
@@ -1206,7 +1205,7 @@ async def cmd_userstats(message: Message):
 @dp.message(Command("addstars", "addtcoin", "reset", "setrate", "makeadmin", "stats"))
 async def cmd_admin_actions(message: Message):
     user = get_user(message.from_user.id)
-    if not user or not user[6]:
+    if not user or not user[7]:  # is_admin
         return
     
     args = message.text.split()
