@@ -30,12 +30,12 @@ from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 # =============================================================================
 
 # Основные токены (замените на свои)
-BOT_TOKEN = "ВАШ_ТОКЕН_TELEGRAM_БОТА"
+BOT_TOKEN = "8684125903:AAGlja8nj_r3HCb8aZwubOqJ_MAGDFAWCoc"
 PIARFLOW_API_KEY = "XIKkM70c5VtJ3PU78j7yqeGjAFwM5zYO"
 PIARFLOW_BASE_URL = "https://piarflow.com/v1"
 
 # ID главного администратора (замените на свой)
-ADMIN_ID = 123456789
+ADMIN_ID = 5356400377
 
 # ==================== НАСТРОЙКИ ПО УМОЛЧАНИЮ ====================
 DEFAULT_SETTINGS = {
