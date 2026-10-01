@@ -1,6 +1,5 @@
 # =============================================================================
-# TELEGRAM БОТ — ФИНАЛЬНАЯ ВЕРСИЯ
-# Цветные кнопки (style), скрытый шанс проигрыша, гайд по играм
+# TELEGRAM БОТ — ФИНАЛЬНАЯ ВЕРСИЯ (ИСПРАВЛЕНО)
 # =============================================================================
 
 import asyncio
@@ -66,6 +65,24 @@ NEAR_MISS = [
 ]
 
 # =============================================================================
+# ========================= РЕГУЛЯРНЫЕ ВЫРАЖЕНИЯ ============================
+# =============================================================================
+
+# ✅ ИСПРАВЛЕНО: используем re.compile() с re.IGNORECASE
+RE_TRANSFER = re.compile(r"^перевод\s+(\S+)\s+(\d+)$", re.IGNORECASE)
+RE_SLOTS = re.compile(r"^слоты\s+\d+$", re.IGNORECASE)
+RE_DICE = re.compile(r"^кости\s+(число|чет|чёт|больше|меньше|б|м)\s+\d+\s+\S+$", re.IGNORECASE)
+RE_DARTS = re.compile(r"^дротик\s+(попадание|промах)\s+\d+$", re.IGNORECASE)
+RE_BASKET = re.compile(r"^баскет\s+(попадание|промах)\s+\d+$", re.IGNORECASE)
+RE_FOOTBALL = re.compile(r"^футбол\s+(попадание|промах)\s+\d+$", re.IGNORECASE)
+RE_ROULETTE = re.compile(r"^рул\s+(цвет|чет|чёт|половина|число|дюжина)\s+\d+\s+\S+$", re.IGNORECASE)
+RE_COIN = re.compile(r"^мон\s+\d+\s+(о|р)$", re.IGNORECASE)
+RE_HILO = re.compile(r"^(больше|меньше)\s+\d+$", re.IGNORECASE)
+RE_MINES = re.compile(r"^мины\s+\d+\s+\d+$", re.IGNORECASE)
+RE_CRASH = re.compile(r"^краш\s+\d+\s+\d+(\.\d+)?$", re.IGNORECASE)
+RE_ADMIN_CMD = re.compile(r"^(stats|requests|addstars|addtcoin|reset|ban|unban|makeadmin|setrate|setminbet|setmaxbet|userstats|createpromo|deletepromo|createcheck|deletecheck|approve|reject)\s*", re.IGNORECASE)
+
+# =============================================================================
 # ========================= FSM =============================================
 # =============================================================================
 
@@ -98,7 +115,7 @@ class MinesStates(StatesGroup):
 # =============================================================================
 
 def cbtn(text: str, callback_data: str = None, style: str = "primary", url: str = None) -> InlineKeyboardButton:
-    """Цветная кнопка через model_validate (style: success/danger/primary)"""
+    """Цветная кнопка через model_validate"""
     data = {"text": text, "style": style}
     if url:
         data["url"] = url
@@ -488,13 +505,11 @@ def round_to_5(n: int) -> int:
     return int(round(n / 5) * 5)
 
 def should_lose(game_key: str) -> bool:
-    """Скрытый шанс проигрыша — проверяется ДО действия"""
     chance = int(float(get_setting(f"lose_chance_{game_key}") or 0))
     if chance <= 0: return False
     return random.randint(1, 100) <= chance
 
 def parse_bet(parts: list, idx: int) -> Tuple[Optional[int], Optional[str]]:
-    """Парсит ставку из частей команды по индексу"""
     if len(parts) <= idx: return None, "⚠️ Укажите ставку!"
     try:
         bet = int(parts[idx])
@@ -543,7 +558,6 @@ async def game_result(msg, emoji, val, bet, won, mult, name):
         await msg.answer(f"🎮 <b>{name}</b>\n\n{re}\n\n😔 <b>Проигрыш</b>\n\n{near}\nПотеряно: {bet} 🪙", parse_mode="HTML", reply_markup=kb)
 
 async def game_lose(msg, name, bet):
-    """Фейковый проигрыш (без кубика) по скрытому шансу"""
     adm = is_admin(msg.from_user.id)
     kb = nav_kb(adm, [[btn_games()]])
     near = random.choice(NEAR_MISS)
@@ -678,7 +692,7 @@ async def cmd_start(msg: Message):
     await render_main_menu(msg, is_cb=False)
 
 # =============================================================================
-# ========================= ПОМОЩЬ (ГАЙД) ===================================
+# ========================= ПОМОЩЬ ==========================================
 # =============================================================================
 
 @dp.callback_query(F.data == "help")
@@ -687,10 +701,10 @@ async def cb_help(cb: CallbackQuery):
     bi = await bot.get_me()
     text = (f"❓ <b>Помощь</b>\n\n"
             f"🤖 <b>{bi.first_name}</b> — реферальный бот с играми.\n\n"
-            f"💫 <b>Starts Coin (SC)</b> — основная валюта, покупается за ⭐️ Telegram Stars 1:1\n"
-            f"🪙 <b>T Coin (TC)</b> — игровая валюта для ставок\n\n"
+            f"💫 <b>Starts Coin (SC)</b> — основная валюта\n"
+            f"🪙 <b>T Coin (TC)</b> — игровая валюта\n\n"
             f"💱 <b>Курс:</b> 1 ⭐️ SC = {get_setting('exchange_rate')} 🪙 TC\n\n"
-            f"Выберите раздел для подробностей:")
+            f"Выберите раздел:")
     kb = build_keyboard([
         [cbtn("📖 О боте", "help_about", "primary")],
         [cbtn("💰 Валюты и обмен", "help_currency", "primary")],
@@ -713,135 +727,121 @@ async def cb_help_section(cb: CallbackQuery):
 
     texts = {
         "about": (f"📖 <b>О боте</b>\n\n"
-                  f"🤖 <b>{bi.first_name}</b> — это реферальный бот с играми и заданиями.\n\n"
-                  f"<b>Основные возможности:</b>\n"
-                  f"💎 <b>Заработок</b> — выполняйте задания и получайте ⭐️ SC\n"
-                  f"🎮 <b>Игры</b> — 10 видов игр на 🪙 TC\n"
-                  f"💱 <b>Обмен</b> — конвертация SC ↔ TC\n"
-                  f"💳 <b>Покупка SC</b> — за ⭐️ Telegram Stars 1:1\n"
-                  f"💰 <b>Продажа SC</b> — за реальные ⭐️ Stars\n"
-                  f"🎫 <b>Чеки</b> — подарочные коды\n"
-                  f"👥 <b>Рефералы</b> — бонусы за друзей\n\n"
-                  f"<b>Команды в чате (без /):</b>\n"
-                  f"• <code>баланс</code> — ваш баланс\n"
+                  f"🤖 <b>{bi.first_name}</b> — реферальный бот с играми.\n\n"
+                  f"<b>Возможности:</b>\n"
+                  f"💎 Заработок — задания\n"
+                  f"🎮 Игры — 10 видов\n"
+                  f"💱 Обмен — SC ↔ TC\n"
+                  f"💳 Покупка SC — за ⭐️ Stars\n"
+                  f"💰 Продажа SC — за ⭐️ Stars\n"
+                  f"🎫 Чеки — подарочные коды\n"
+                  f"👥 Рефералы — бонусы за друзей\n\n"
+                  f"<b>Команды (без /):</b>\n"
+                  f"• <code>баланс</code> — баланс\n"
                   f"• <code>топ</code> — топ игроков\n"
                   f"• <code>профиль</code> — профиль\n"
-                  f"• <code>помощь</code> — эта справка\n"
-                  f"• <code>обмен</code> — обмен валют\n"
+                  f"• <code>помощь</code> — справка\n"
+                  f"• <code>обмен</code> — обмен\n"
                   f"• <code>заработать</code> — задания\n"
                   f"• <code>игры</code> — список игр"),
         "currency": (f"💰 <b>Валюты и обмен</b>\n\n"
                      f"⭐️ <b>Starts Coin (SC)</b>\n"
-                     f"• Основная валюта бота\n"
-                     f"• Покупка: 1 SC = 1 ⭐️ Telegram Star\n"
+                     f"• Покупка: 1 SC = 1 ⭐️ Star\n"
                      f"• Продажа: 1 SC = 1 ⭐️ (комиссия {commission}%)\n"
-                     f"• Округление при продаже до 5 ⭐️\n\n"
+                     f"• Округление до 5 ⭐️\n\n"
                      f"🪙 <b>T Coin (TC)</b>\n"
-                     f"• Игровая валюта для ставок\n"
+                     f"• Игровая валюта\n"
                      f"• Получается обменом SC → TC\n\n"
                      f"💱 <b>Обмен:</b>\n"
                      f"• 1 ⭐️ SC = {rate} 🪙 TC\n"
-                     f"• {rate} 🪙 TC = 1 ⭐️ SC\n"
-                     f"• Введите любое количество\n\n"
+                     f"• {rate} 🪙 TC = 1 ⭐️ SC\n\n"
                      f"<b>Как обменять:</b>\n"
                      f"1️⃣ <code>баланс</code> → 🔄 Обмен\n"
                      f"2️⃣ Выберите направление\n"
                      f"3️⃣ Введите количество"),
         "games": (f"🎮 <b>Гайд по играм</b>\n\n"
-                  f"<b>Все игры работают на 🪙 TC.</b>\n"
-                  f"<b>Команды пишутся в чат БЕЗ /</b>\n\n"
-                  f"🎰 <b>слоты [сумма]</b> — ×10 джекпот, ×2 малый\n\n"
+                  f"<b>Все игры на 🪙 TC. Команды БЕЗ /</b>\n\n"
+                  f"🎰 <b>слоты [сумма]</b> — ×10, ×2\n\n"
                   f"🎲 <b>кости [режим] [сумма] [параметр]</b>\n"
-                  f"• <code>кости число 100 3</code> — угадать число ×6\n"
-                  f"• <code>кости чет 100 чет</code> — чёт/нечет ×2\n"
-                  f"• <code>кости больше 100 б</code> — больше/меньше ×2\n\n"
+                  f"• <code>кости число 100 3</code> — ×6\n"
+                  f"• <code>кости чет 100 чет</code> — ×2\n"
+                  f"• <code>кости больше 100 б</code> — ×2\n\n"
                   f"🎯 <b>дротик [событие] [сумма]</b>\n"
-                  f"• <code>дротик попадание 100</code> — ×1.9 (4-6)\n"
-                  f"• <code>дротик промах 100</code> — ×1.9 (1-3)\n\n"
+                  f"• <code>дротик попадание 100</code> — ×1.9\n"
+                  f"• <code>дротик промах 100</code> — ×1.9\n\n"
                   f"🏀 <b>баскет [событие] [сумма]</b>\n"
-                  f"• <code>баскет попадание 100</code> — ×1.9 (5)\n"
-                  f"• <code>баскет промах 100</code> — ×1.9 (1-4)\n\n"
+                  f"• <code>баскет попадание 100</code> — ×1.9\n"
+                  f"• <code>баскет промах 100</code> — ×1.9\n\n"
                   f"⚽ <b>футбол [событие] [сумма]</b>\n"
-                  f"• <code>футбол попадание 100</code> — ×1.9 (4-6)\n"
-                  f"• <code>футбол промах 100</code> — ×1.9 (1-3)\n\n"
+                  f"• <code>футбол попадание 100</code> — ×1.9\n"
+                  f"• <code>футбол промах 100</code> — ×1.9\n\n"
                   f"🎡 <b>рул [тип] [сумма] [параметр]</b>\n"
-                  f"• <code>рул цвет 100 к</code> — красный ×2\n"
-                  f"• <code>рул цвет 100 ч</code> — чёрный ×2\n"
-                  f"• <code>рул цвет 100 з</code> — зеро ×14\n"
-                  f"• <code>рул число 100 17</code> — точное ×36\n\n"
+                  f"• <code>рул цвет 100 к</code> — ×2\n"
+                  f"• <code>рул число 100 17</code> — ×36\n\n"
                   f"🪙 <b>мон [сумма] [о/р]</b> — ×2\n\n"
-                  f"📊 <b>больше [сумма]</b> / <b>меньше [сумма]</b> — ×1.9\n\n"
+                  f"📊 <b>больше/меньше [сумма]</b> — ×1.9\n\n"
                   f"💣 <b>мины [сумма] [1-5]</b> — сетка 5×5\n"
                   f"🚀 <b>краш [сумма] [множитель]</b> — авто-вывод\n\n"
-                  f"💡 <b>Совет:</b> Начинайте с малых ставок!"),
+                  f"💡 Начинайте с малых ставок!"),
         "earn": (f"💎 <b>Как заработать</b>\n\n"
                  f"<b>Способы получения ⭐️ SC:</b>\n\n"
                  f"1️⃣ <b>Задания</b>\n"
-                 f"• Нажмите <b>💎 Заработать</b>\n"
+                 f"• <b>💎 Заработать</b>\n"
                  f"• Подпишитесь на канал\n"
-                 f"• Нажмите <b>✅ Проверить</b>\n"
+                 f"• <b>✅ Проверить</b>\n"
                  f"• Получите <b>{task_reward} ⭐️ SC</b>\n"
                  f"• Задания не повторяются!\n\n"
                  f"2️⃣ <b>Ежедневный бонус</b>\n"
-                 f"• В профиле нажмите <b>🎁 Бонус</b>\n"
-                 f"• Получите ⭐️ SC и 🪙 TC каждый день\n\n"
+                 f"• В профиле <b>🎁 Бонус</b>\n\n"
                  f"3️⃣ <b>Промокоды</b>\n"
-                 f"• В профиле <b>🎟 Промокод</b>\n"
-                 f"• Введите код и получите бонус\n\n"
+                 f"• В профиле <b>🎟 Промокод</b>\n\n"
                  f"4️⃣ <b>Чеки</b>\n"
-                 f"• Активируйте по ссылке\n"
-                 f"• Получите ⭐️ SC и 🪙 TC\n\n"
+                 f"• Активируйте по ссылке\n\n"
                  f"5️⃣ <b>Рефералы</b>\n"
-                 f"• Поделитесь ссылкой из профиля\n"
-                 f"• Получите {get_setting('referral_bonus')} ⭐️ SC за друга\n\n"
+                 f"• Поделитесь ссылкой\n"
+                 f"• Получите {get_setting('referral_bonus')} ⭐️ SC\n\n"
                  f"6️⃣ <b>Покупка</b>\n"
                  f"• <code>баланс</code> → 💎 Купить SC\n"
-                 f"• 1 SC = 1 ⭐️ Telegram Star"),
+                 f"• 1 SC = 1 ⭐️ Star"),
         "checks": (f"🎫 <b>Чеки</b>\n\n"
-                   f"Чеки — подарочные коды с ⭐️ SC и 🪙 TC.\n\n"
-                   f"<b>Создание чека:</b>\n"
+                   f"Чеки — подарочные коды.\n\n"
+                   f"<b>Создание:</b>\n"
                    f"1️⃣ <code>баланс</code> → 🎫 Создать чек\n"
-                   f"2️⃣ Укажите количество ⭐️ SC\n"
-                   f"3️⃣ Укажите количество 🪙 TC\n"
-                   f"4️⃣ Укажите число активаций\n"
+                   f"2️⃣ Укажите ⭐️ SC\n"
+                   f"3️⃣ Укажите 🪙 TC\n"
+                   f"4️⃣ Укажите активаций\n"
                    f"5️⃣ Средства заморозятся\n"
                    f"6️⃣ Получите ссылку\n\n"
                    f"<b>Активация:</b>\n"
-                   f"• ТОЛЬКО по ссылке (без кнопки)\n"
+                   f"• ТОЛЬКО по ссылке\n"
                    f"• Формат: <code>t.me/bot?start=check_КОД</code>\n"
-                   f"• Один чек = одна активация на юзера\n\n"
+                   f"• Один чек = одна активация\n\n"
                    f"<b>Мои чеки:</b>\n"
-                   f"• <code>баланс</code> → 🎫 Мои чеки\n"
-                   f"• Там все ваши созданные чеки"),
+                   f"• <code>баланс</code> → 🎫 Мои чеки"),
         "ref": (f"👥 <b>Рефералы</b>\n\n"
                 f"Ваша ссылка в <b>👤 Профиль</b>\n\n"
-                f"💰 <b>Бонус:</b> {get_setting('referral_bonus')} ⭐️ SC за друга\n\n"
+                f"💰 <b>Бонус:</b> {get_setting('referral_bonus')} ⭐️ SC\n\n"
                 f"<b>Как работает:</b>\n"
-                f"1️⃣ Друг переходит по вашей ссылке\n"
-                f"2️⃣ Подписывается на спонсора (верификация)\n"
-                f"3️⃣ Вы получаете бонус автоматически\n\n"
-                f"📊 Статистика в профиле\n\n"
-                f"<b>Совет:</b>\n"
-                f"• Делитесь ссылкой в чатах\n"
-                f"• Создавайте чеки для друзей\n"
-                f"• Активные рефералы = больше SC"),
+                f"1️⃣ Друг переходит по ссылке\n"
+                f"2️⃣ Подписывается на спонсора\n"
+                f"3️⃣ Вы получаете бонус\n\n"
+                f"📊 Статистика в профиле"),
         "rules": (f"🛡 <b>Правила</b>\n\n"
-                  f"⚠️ <b>Важно:</b>\n\n"
-                  f"• Запрещено использовать ботов\n"
-                  f"• Запрещена накрутка рефералов\n"
-                  f"• Запрещены мультиаккаунты\n"
-                  f"• Нарушение = бан без возврата\n\n"
+                  f"⚠️ <b>Запрещено:</b>\n"
+                  f"• Боты\n"
+                  f"• Накрутка рефералов\n"
+                  f"• Мультиаккаунты\n"
+                  f"• Нарушение = бан\n\n"
                   f"💰 <b>Финансы:</b>\n"
-                  f"• Мин. ставка в играх: {get_setting('min_bet')} 🪙\n"
+                  f"• Мин. ставка: {get_setting('min_bet')} 🪙\n"
                   f"• Макс. ставка: {get_setting('max_bet')} 🪙\n"
-                  f"• Мин. продажа SC: {get_setting('min_withdraw')} ⭐️\n"
-                  f"• Комиссия продажи: {commission}%\n\n"
+                  f"• Мин. продажа: {get_setting('min_withdraw')} ⭐️\n"
+                  f"• Комиссия: {commission}%\n\n"
                   f"🎮 <b>Игры:</b>\n"
-                  f"• Все результаты честные\n"
-                  f"• Кубики — нативные Telegram\n"
-                  f"• Проигрыш = потеря ставки\n\n"
+                  f"• Результаты честные\n"
+                  f"• Кубики — нативные Telegram\n\n"
                   f"📞 <b>Поддержка:</b>\n"
-                  f"• По всем вопросам — к админу"),
+                  f"• По вопросам — к админу"),
     }
     text = texts.get(section, "Раздел не найден")
     kb = build_keyboard([
@@ -1070,11 +1070,12 @@ async def cb_history(cb: CallbackQuery):
 # ========================= ПЕРЕВОДЫ ========================================
 # =============================================================================
 
-@dp.message(F.text.regexp(r"^перевод\s+(\S+)\s+(\d+)$", ignore_case=True))
+# ✅ ИСПРАВЛЕНО: используем RE_TRANSFER
+@dp.message(F.text.regexp(RE_TRANSFER))
 async def cmd_transfer_text(msg: Message):
     if get_setting("transfer_enabled") != "1":
         return await msg.answer("❌ Переводы отключены.", reply_markup=nav_kb(is_admin(msg.from_user.id)))
-    match = re.match(r"^перевод\s+(\S+)\s+(\d+)$", msg.text, re.IGNORECASE)
+    match = RE_TRANSFER.match(msg.text)
     if not match: return
     arg, amount_str = match.group(1), match.group(2)
     tid = await resolve_user_id(arg)
@@ -1352,9 +1353,8 @@ async def cb_sell_starts(cb: CallbackQuery, state: FSMContext):
             f"⭐️ Ваш баланс: <code>{u['stars_balance']}</code> SC\n"
             f"💵 Минимум: {mw} SC\n"
             f"💸 Комиссия: {commission}%\n"
-            f"💱 Курс: 1 SC = 1 ⭐️ (реальные Telegram Stars)\n"
+            f"💱 Курс: 1 SC = 1 ⭐️\n"
             f"🔢 Округление: до 5 ⭐️\n\n"
-            f"<i>Пример: 100 SC → 97 ⭐️ → округл. до 95 ⭐️</i>\n\n"
             f"Отправьте сумму продажи:")
     await render(cb.message, text, build_keyboard([[btn_cancel("cancel_sell")]]), is_cb=True)
     await state.set_state(UserStates.waiting_withdraw_amount)
@@ -1381,7 +1381,7 @@ async def process_sell_amount(msg: Message, state: FSMContext):
     commission = int(get_setting("sell_commission") or 3)
     payout_raw = int(amount * (100 - commission) / 100)
     payout = round_to_5(payout_raw)
-    await msg.answer(f"✅ Заявка #{rid} на продажу {amount} SC создана.\n💵 Вы получите: <b>{payout} ⭐️</b> (округлено до 5)\n💸 Комиссия: {commission}%",
+    await msg.answer(f"✅ Заявка #{rid} на продажу {amount} SC создана.\n💵 Вы получите: <b>{payout} ⭐️</b>\n💸 Комиссия: {commission}%",
                      parse_mode="HTML", reply_markup=nav_kb(False, [btn_profile()]))
     try:
         await bot.send_message(ADMIN_ID,
@@ -1495,18 +1495,12 @@ async def cb_games_menu(cb: CallbackQuery):
             f"<b>🎲 Команды в чате (БЕЗ /):</b>\n"
             f"• <code>слоты 100</code>\n"
             f"• <code>кости число 100 3</code>\n"
-            f"• <code>кости чет 100 чет</code>\n"
-            f"• <code>кости больше 100 б</code>\n"
             f"• <code>дротик попадание 100</code>\n"
             f"• <code>дротик промах 100</code>\n"
             f"• <code>баскет попадание 100</code>\n"
             f"• <code>баскет промах 100</code>\n"
             f"• <code>футбол попадание 100</code>\n"
             f"• <code>футбол промах 100</code>\n"
-            f"• <code>рул цвет 100 к</code>\n"
-            f"• <code>рул число 100 17</code>\n"
-            f"• <code>мон 100 о</code>\n"
-            f"• <code>больше 100</code> / <code>меньше 100</code>\n"
             f"• <code>мины 100 3</code>\n"
             f"• <code>краш 100 2.0</code>\n\n"
             f"💵 Ставки: {get_setting('min_bet') or '10'}–{get_setting('max_bet') or '50000'} 🪙\n\n"
@@ -1533,7 +1527,8 @@ async def cmd_games_text(msg: Message):
 # ========================= ИГРЫ ============================================
 # =============================================================================
 
-@dp.message(F.text.regexp(r"^слоты\s+\d+$", ignore_case=True))
+# ✅ ИСПРАВЛЕНО: используем RE_SLOTS вместо F.text.regexp(..., ignore_case=True)
+@dp.message(F.text.regexp(RE_SLOTS))
 async def g_slots(msg: Message):
     if not await game_ready(msg): return
     adm = is_admin(msg.from_user.id)
@@ -1542,7 +1537,6 @@ async def g_slots(msg: Message):
     bet, err = parse_bet(parts, 1)
     if err: return await msg.answer(err, reply_markup=ke)
     if not check_bal(msg.from_user.id, bet): return await msg.answer("❌ Недостаточно TC!", reply_markup=ke)
-    # Скрытый шанс проигрыша
     if should_lose("slots"):
         update_balance(msg.from_user.id, tcoin=-bet, desc="Ставка: Слоты")
         return await game_lose(msg, "Слоты", bet)
@@ -1553,7 +1547,7 @@ async def g_slots(msg: Message):
     elif v <= 10: await game_result(msg, "🎰", v, bet, True, 2, "Слоты")
     else: await game_result(msg, "🎰", v, bet, False, 0, "Слоты")
 
-@dp.message(F.text.regexp(r"^кости\s+(число|чет|чёт|больше|меньше|б|м)\s+\d+\s+\S+$", ignore_case=True))
+@dp.message(F.text.regexp(RE_DICE))
 async def g_dice(msg: Message):
     if not await game_ready(msg): return
     adm = is_admin(msg.from_user.id)
@@ -1588,7 +1582,7 @@ async def g_dice(msg: Message):
         else: return await msg.answer("❌ б/м", reply_markup=ke)
         await game_result(msg, "🎲", v, bet, (v >= 4) == wh, 2, f"Кости ({'больше' if wh else 'меньше'})")
 
-@dp.message(F.text.regexp(r"^дротик\s+(попадание|промах)\s+\d+$", ignore_case=True))
+@dp.message(F.text.regexp(RE_DARTS))
 async def g_darts(msg: Message):
     if not await game_ready(msg): return
     adm = is_admin(msg.from_user.id)
@@ -1610,7 +1604,7 @@ async def g_darts(msg: Message):
     else: won = not hit
     await game_result(msg, "🎯", v, bet, won, 1.9, f"Дротик ({event})")
 
-@dp.message(F.text.regexp(r"^баскет\s+(попадание|промах)\s+\d+$", ignore_case=True))
+@dp.message(F.text.regexp(RE_BASKET))
 async def g_basket(msg: Message):
     if not await game_ready(msg): return
     adm = is_admin(msg.from_user.id)
@@ -1632,7 +1626,7 @@ async def g_basket(msg: Message):
     else: won = not hit
     await game_result(msg, "🏀", v, bet, won, 1.9, f"Баскет ({event})")
 
-@dp.message(F.text.regexp(r"^футбол\s+(попадание|промах)\s+\d+$", ignore_case=True))
+@dp.message(F.text.regexp(RE_FOOTBALL))
 async def g_foot(msg: Message):
     if not await game_ready(msg): return
     adm = is_admin(msg.from_user.id)
@@ -1654,7 +1648,7 @@ async def g_foot(msg: Message):
     else: won = not hit
     await game_result(msg, "⚽", v, bet, won, 1.9, f"Футбол ({event})")
 
-@dp.message(F.text.regexp(r"^рул\s+(цвет|чет|чёт|половина|число|дюжина)\s+\d+\s+\S+$", ignore_case=True))
+@dp.message(F.text.regexp(RE_ROULETTE))
 async def g_roulette(msg: Message):
     if not await game_ready(msg): return
     adm = is_admin(msg.from_user.id)
@@ -1710,7 +1704,7 @@ async def g_roulette(msg: Message):
     else:
         await msg.answer(f"🎡 <b>Рулетка:</b> {ce} <b>{num}</b> ({cn})\n\n😔 <b>Проигрыш</b>\n\n{random.choice(NEAR_MISS)}\n-{bet} 🪙", parse_mode="HTML", reply_markup=kb)
 
-@dp.message(F.text.regexp(r"^мон\s+\d+\s+(о|р)$", ignore_case=True))
+@dp.message(F.text.regexp(RE_COIN))
 async def g_coin(msg: Message):
     if not await game_ready(msg): return
     adm = is_admin(msg.from_user.id)
@@ -1739,7 +1733,7 @@ async def g_coin(msg: Message):
     else:
         await msg.answer(f"{em} <b>{res.capitalize()}!</b>\n\n😔 <b>Проигрыш</b>\n\n{random.choice(NEAR_MISS)}\n-{bet} 🪙", parse_mode="HTML", reply_markup=kb)
 
-@dp.message(F.text.regexp(r"^(больше|меньше)\s+\d+$", ignore_case=True))
+@dp.message(F.text.regexp(RE_HILO))
 async def g_hilo(msg: Message):
     if not await game_ready(msg): return
     parts = msg.text.split()
@@ -1768,7 +1762,7 @@ async def g_hilo(msg: Message):
     else:
         await msg.answer(f"{em} <b>Число: {num}</b>\n\n😔 <b>Проигрыш</b>\n\n{random.choice(NEAR_MISS)}\n-{bet} 🪙", parse_mode="HTML", reply_markup=kb)
 
-@dp.message(F.text.regexp(r"^мины\s+\d+\s+\d+$", ignore_case=True))
+@dp.message(F.text.regexp(RE_MINES))
 async def g_mines(msg: Message, state: FSMContext):
     if not await game_ready(msg): return
     adm = is_admin(msg.from_user.id)
@@ -1785,7 +1779,6 @@ async def g_mines(msg: Message, state: FSMContext):
     except: return await msg.answer("❌ Мины: 1-5!", reply_markup=ke)
     if not 1 <= mc <= 5: return await msg.answer("❌ Мины: 1-5!", reply_markup=ke)
     if not check_bal(msg.from_user.id, bet): return await msg.answer("❌ Недостаточно TC!", reply_markup=ke)
-    # Скрытый шанс проигрыша — первая клетка мина
     if should_lose("mines"):
         update_balance(msg.from_user.id, tcoin=-bet, desc=f"Ставка: Мины ({mc})")
         mines = [0] + random.sample(range(1, 25), mc - 1) if mc > 1 else [0]
@@ -1893,7 +1886,7 @@ async def mine_cashout(cb: CallbackQuery, state: FSMContext):
 async def mine_disabled(cb: CallbackQuery):
     await cb.answer("⬜", show_alert=True)
 
-@dp.message(F.text.regexp(r"^краш\s+\d+\s+\d+(\.\d+)?$", ignore_case=True))
+@dp.message(F.text.regexp(RE_CRASH))
 async def g_crash(msg: Message):
     if not await game_ready(msg): return
     adm = is_admin(msg.from_user.id)
@@ -2371,7 +2364,8 @@ async def proc_bc(msg: Message, state: FSMContext):
 # ========================= ТЕКСТОВЫЕ АДМИН-КОМАНДЫ =========================
 # =============================================================================
 
-@dp.message(F.text.regexp(r"^(stats|requests|addstars|addtcoin|reset|ban|unban|makeadmin|setrate|setminbet|setmaxbet|userstats|createpromo|deletepromo|createcheck|deletecheck|approve|reject)\s*", ignore_case=True))
+# ✅ ИСПРАВЛЕНО: используем RE_ADMIN_CMD
+@dp.message(F.text.regexp(RE_ADMIN_CMD))
 async def admin_cmds_text(msg: Message):
     if not is_admin(msg.from_user.id): return
     parts = msg.text.split()
