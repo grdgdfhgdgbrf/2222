@@ -1,5 +1,6 @@
 # =============================================================================
-# TELEGRAM БОТ — ФИНАЛЬНАЯ ВЕРСИЯ (ИСПРАВЛЕНО)
+# TELEGRAM БОТ — ПОЛНАЯ ИСПРАВЛЕННАЯ ВЕРСИЯ
+# Все 20 ошибок исправлены
 # =============================================================================
 
 import asyncio
@@ -8,6 +9,7 @@ import random
 import sqlite3
 import re
 import html
+import time
 import aiohttp
 import string
 from datetime import datetime, timedelta
@@ -22,13 +24,13 @@ from aiogram.types import (
     InlineKeyboardMarkup, LabeledPrice, PreCheckoutQuery
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 
 # =============================================================================
 # ========================= КОНФИГУРАЦИЯ ====================================
 # =============================================================================
 
-BOT_TOKEN = "8684125903:AAGlja8nj_r3HCb8aZwubOqJ_MAGDFAWCoc"
+BOT_TOKEN = "ВАШ_ТОКЕН_TEЛЕGRAM_БОТА"
 PIARFLOW_API_KEY = "MSnWP-9zGC1ZProz_dUSrj5TqeQ--khK"
 PIARFLOW_BASE_URL = "https://piarflow.com/v1"
 ADMIN_ID = 5356400377
@@ -54,7 +56,30 @@ DEFAULT_SETTINGS = {
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 user_current_task: Dict[int, Dict] = {}
+
+# ✅ ИСПРАВЛЕНИЕ 14: TTL-кэш с автоматической очисткой
 api_cache: Dict[str, Tuple] = {}
+CACHE_TTL = 60  # секунд
+
+def cache_get(key: str):
+    """Получить из кэша с проверкой TTL"""
+    if key in api_cache:
+        data, ts = api_cache[key]
+        if time.time() - ts < CACHE_TTL:
+            return data
+        else:
+            del api_cache[key]
+    return None
+
+def cache_set(key: str, data):
+    """Сохранить в кэш"""
+    # Очистка старых записей при переполнении
+    if len(api_cache) > 1000:
+        now = time.time()
+        to_del = [k for k, (_, ts) in api_cache.items() if now - ts > CACHE_TTL]
+        for k in to_del:
+            del api_cache[k]
+    api_cache[key] = (data, time.time())
 
 NEAR_MISS = [
     "🔥 Почти! Ещё чуть-чуть...",
@@ -68,7 +93,6 @@ NEAR_MISS = [
 # ========================= РЕГУЛЯРНЫЕ ВЫРАЖЕНИЯ ============================
 # =============================================================================
 
-# ✅ ИСПРАВЛЕНО: используем re.compile() с re.IGNORECASE
 RE_TRANSFER = re.compile(r"^перевод\s+(\S+)\s+(\d+)$", re.IGNORECASE)
 RE_SLOTS = re.compile(r"^слоты\s+\d+$", re.IGNORECASE)
 RE_DICE = re.compile(r"^кости\s+(число|чет|чёт|больше|меньше|б|м)\s+\d+\s+\S+$", re.IGNORECASE)
@@ -81,6 +105,9 @@ RE_HILO = re.compile(r"^(больше|меньше)\s+\d+$", re.IGNORECASE)
 RE_MINES = re.compile(r"^мины\s+\d+\s+\d+$", re.IGNORECASE)
 RE_CRASH = re.compile(r"^краш\s+\d+\s+\d+(\.\d+)?$", re.IGNORECASE)
 RE_ADMIN_CMD = re.compile(r"^(stats|requests|addstars|addtcoin|reset|ban|unban|makeadmin|setrate|setminbet|setmaxbet|userstats|createpromo|deletepromo|createcheck|deletecheck|approve|reject)\s*", re.IGNORECASE)
+# ✅ ИСПРАВЛЕНИЕ 2: точный regex для mine_ (только цифры)
+RE_MINE_CELL = re.compile(r"^mc_(\d+)$")
+RE_MINE_DISABLED = re.compile(r"^md_(\d+)$")
 
 # =============================================================================
 # ========================= FSM =============================================
@@ -114,21 +141,22 @@ class MinesStates(StatesGroup):
 # ========================= ЦВЕТНЫЕ КНОПКИ ==================================
 # =============================================================================
 
+# ✅ ИСПРАВЛЕНИЕ 1: используем эмодзи-префиксы вместо style
 def cbtn(text: str, callback_data: str = None, style: str = "primary", url: str = None) -> InlineKeyboardButton:
-    """Цветная кнопка через model_validate"""
-    data = {"text": text, "style": style}
+    """Кнопка с эмодзи-префиксом (style — визуальный индикатор)"""
+    icons = {"success": "✅", "danger": "❌", "primary": "🔹"}
+    prefix = icons.get(style, "🔹")
+    full_text = f"{prefix} {text}"
     if url:
-        data["url"] = url
-    else:
-        data["callback_data"] = callback_data
-    return InlineKeyboardButton.model_validate(data)
+        return InlineKeyboardButton(text=full_text, url=url)
+    return InlineKeyboardButton(text=full_text, callback_data=callback_data)
 
 def btn_menu(): return cbtn("🏠 Главное меню", "back_menu", "primary")
 def btn_profile(): return cbtn("🔙 Профиль", "profile", "primary")
 def btn_admin(): return cbtn("👑 Админ-панель", "admin", "danger")
 def btn_games(): return cbtn("🎮 К играм", "games_menu", "success")
 def btn_balance(): return cbtn("💰 Баланс", "balance_menu", "success")
-def btn_cancel(target="back_menu"): return cbtn("❌ Отмена", target, "danger")
+def btn_cancel(target="back_menu"): return cbtn("Отмена", target, "danger")
 
 def build_keyboard(rows):
     b = InlineKeyboardBuilder()
@@ -191,6 +219,22 @@ def init_db() -> None:
         created_at TEXT DEFAULT CURRENT_TIMESTAMP, processed_at TEXT)""")
     for key, value in DEFAULT_SETTINGS.items():
         c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (key, value))
+    conn.commit()
+    conn.close()
+    # ✅ ИСПРАВЛЕНИЕ 8: миграция БД
+    migrate_db()
+
+def migrate_db() -> None:
+    """Добавляет недостающие колонки в существующую БД"""
+    conn = get_db()
+    migrations = [
+        "ALTER TABLE users ADD COLUMN is_verified INTEGER DEFAULT 0",
+    ]
+    for sql in migrations:
+        try:
+            conn.execute(sql)
+        except sqlite3.OperationalError:
+            pass  # Колонка уже есть
     conn.commit()
     conn.close()
 
@@ -267,6 +311,25 @@ def increment_tasks(uid):
 def increment_referrals(uid):
     conn = get_db()
     conn.execute("UPDATE users SET total_referrals=total_referrals+1 WHERE user_id=?", (uid,))
+    conn.commit()
+    conn.close()
+
+# ✅ ИСПРАВЛЕНИЕ 10: функция для статистики игр
+def increment_game_stat(uid, won: bool):
+    """Обновляет статистику игр (если есть колонки)"""
+    conn = get_db()
+    try:
+        conn.execute("ALTER TABLE users ADD COLUMN games_played INTEGER DEFAULT 0")
+        conn.execute("ALTER TABLE users ADD COLUMN games_won INTEGER DEFAULT 0")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        if won:
+            conn.execute("UPDATE users SET games_played=games_played+1, games_won=games_won+1 WHERE user_id=?", (uid,))
+        else:
+            conn.execute("UPDATE users SET games_played=games_played+1 WHERE user_id=?", (uid,))
+    except sqlite3.OperationalError:
+        pass
     conn.commit()
     conn.close()
 
@@ -445,16 +508,17 @@ init_db()
 
 async def pf_get_task(uid, cid):
     ck = f"task_{uid}"
-    if ck in api_cache and datetime.now().timestamp() - api_cache[ck][1] < 60:
-        return api_cache[ck][0]
+    cached = cache_get(ck)
+    if cached: return cached
     async with aiohttp.ClientSession() as s:
         h = {"Authorization": f"Bearer {PIARFLOW_API_KEY}", "Content-Type": "application/json"}
         try:
             async with s.post(f"{PIARFLOW_BASE_URL}/sponsors", json={"user_id": uid, "chat_id": cid, "max_sponsors": 10}, headers=h) as r:
                 d = await r.json()
-                api_cache[ck] = (d, datetime.now().timestamp())
+                cache_set(ck, d)
                 return d
         except Exception as e:
+            logging.error(f"PiarFlow API error: {e}")
             return {"status": "error", "message": str(e)}
 
 async def pf_check_task(uid, link):
@@ -501,8 +565,9 @@ def safe_html(text): return html.escape(text)
 def generate_code(length=8) -> str:
     return ''.join(random.choices(string.ascii_uppercase + string.digits, k=length))
 
+# ✅ ИСПРАВЛЕНИЕ 12: округление ВНИЗ до 5
 def round_to_5(n: int) -> int:
-    return int(round(n / 5) * 5)
+    return int((n // 5) * 5)
 
 def should_lose(game_key: str) -> bool:
     chance = int(float(get_setting(f"lose_chance_{game_key}") or 0))
@@ -515,6 +580,8 @@ def parse_bet(parts: list, idx: int) -> Tuple[Optional[int], Optional[str]]:
         bet = int(parts[idx])
     except ValueError:
         return None, "❌ Ставка — число!"
+    # ✅ ИСПРАВЛЕНИЕ 11: проверка отрицательных ставок
+    if bet <= 0: return None, "❌ Ставка > 0!"
     mn, mx = int(get_setting("min_bet") or 10), int(get_setting("max_bet") or 50000)
     if bet < mn: return None, f"❌ Мин. ставка: {mn} 🪙"
     if bet > mx: return None, f"❌ Макс. ставка: {mx} 🪙"
@@ -549,6 +616,8 @@ async def game_result(msg, emoji, val, bet, won, mult, name):
     adm = is_admin(msg.from_user.id)
     kb = nav_kb(adm, [[btn_games()]])
     re = dice_emoji(emoji, val)
+    # ✅ ИСПРАВЛЕНИЕ 10: статистика игр
+    increment_game_stat(msg.from_user.id, won)
     if won:
         pay = int(bet * mult)
         update_balance(msg.from_user.id, tcoin=pay, desc=f"Выигрыш {name}")
@@ -557,11 +626,19 @@ async def game_result(msg, emoji, val, bet, won, mult, name):
         near = random.choice(NEAR_MISS)
         await msg.answer(f"🎮 <b>{name}</b>\n\n{re}\n\n😔 <b>Проигрыш</b>\n\n{near}\nПотеряно: {bet} 🪙", parse_mode="HTML", reply_markup=kb)
 
-async def game_lose(msg, name, bet):
+# ✅ ИСПРАВЛЕНИЕ 10: game_lose с фейковым результатом и статистикой
+async def game_lose(msg, name, bet, emoji=None):
     adm = is_admin(msg.from_user.id)
     kb = nav_kb(adm, [[btn_games()]])
     near = random.choice(NEAR_MISS)
-    await msg.answer(f"🎮 <b>{name}</b>\n\n😔 <b>Проигрыш</b>\n\n{near}\nПотеряно: {bet} 🪙", parse_mode="HTML", reply_markup=kb)
+    increment_game_stat(msg.from_user.id, False)
+    # ✅ ИСПРАВЛЕНИЕ 13: показываем фейковый результат
+    if emoji:
+        fake_val = random.randint(1, 6) if emoji == "🎲" else (random.randint(1, 3) if emoji == "🎯" else random.randint(1, 3))
+        re = dice_emoji(emoji, fake_val)
+        await msg.answer(f"🎮 <b>{name}</b>\n\n{re}\n\n😔 <b>Проигрыш</b>\n\n{near}\nПотеряно: {bet} 🪙", parse_mode="HTML", reply_markup=kb)
+    else:
+        await msg.answer(f"🎮 <b>{name}</b>\n\n😔 <b>Проигрыш</b>\n\n{near}\nПотеряно: {bet} 🪙", parse_mode="HTML", reply_markup=kb)
 
 async def game_ready(msg):
     u = get_user(msg.from_user.id)
@@ -573,6 +650,15 @@ async def game_ready(msg):
     if not is_verified(msg.from_user.id): await msg.answer("⚠️ Верификация: start", reply_markup=kb); return False
     if get_setting("games_enabled") != "1": await msg.answer("❌ Игры отключены.", reply_markup=kb); return False
     return True
+
+async def safe_send(uid, text, parse_mode="HTML"):
+    """✅ ИСПРАВЛЕНИЕ 15: безопасная отправка с обработкой ошибок"""
+    try:
+        await bot.send_message(uid, text, parse_mode=parse_mode)
+    except TelegramForbiddenError:
+        logging.warning(f"User {uid} blocked the bot")
+    except Exception as e:
+        logging.error(f"Send error to {uid}: {e}")
 
 # =============================================================================
 # ========================= РЕНДЕР ==========================================
@@ -615,10 +701,16 @@ async def render_main_menu(target, is_cb=False):
             [cbtn("👑 Админ-панель", "admin", "danger")]])
     await render(target, text, kb, is_cb)
 
+# ✅ ИСПРАВЛЕНИЕ 6: показываем ошибку при недоступности API
 async def render_verify(target, is_cb=False):
     uid = target.from_user.id if hasattr(target, 'from_user') else target.message.from_user.id
     text = "⚠️ <b>Подтверждение регистрации</b>\n\nПодпишитесь на спонсора для доступа:"
     td = await pf_get_task(uid, uid)
+    if td.get("status") == "error":
+        # Ошибка API — НЕ верифицируем автоматически
+        kb = build_keyboard([[cbtn("🔄 Повторить", "retry_verify", "success")], [btn_menu()]])
+        await render(target, "⚠️ <b>Ошибка загрузки заданий</b>\n\nПопробуйте позже или обратитесь к администратору.", kb, is_cb)
+        return
     if td.get("status") == "ok" and td.get("sponsors"):
         sponsors = td["sponsors"]
         available = [s for s in sponsors if not is_task_completed(uid, s["link"])]
@@ -632,8 +724,9 @@ async def render_verify(target, is_cb=False):
             [cbtn("✅ Проверить подписку", "task_check", "success")],
             [btn_menu()]])
     else:
-        update_user_field(uid, "is_verified", 1)
-        await render_main_menu(target, is_cb)
+        # Нет заданий — НЕ верифицируем автоматически
+        kb = build_keyboard([[cbtn("🔄 Повторить", "retry_verify", "success")], [btn_menu()]])
+        await render(target, "⚠️ <b>Заданий пока нет</b>\n\nПопробуйте позже.", kb, is_cb)
         return
     await render(target, text, kb, is_cb)
 
@@ -684,12 +777,16 @@ async def cmd_start(msg: Message):
             bonus = int(get_setting("referral_bonus") or 5)
             update_balance(ref_by, stars=bonus, desc="Реферальный бонус")
             increment_referrals(ref_by)
-            try: await bot.send_message(ref_by, f"🎉 <b>Друг зарегистрировался!</b>\n+{bonus} ⭐️ SC", parse_mode="HTML")
-            except: pass
+            await safe_send(ref_by, f"🎉 <b>Друг зарегистрировался!</b>\n+{bonus} ⭐️ SC")
     u = get_user(uid)
     if not u['is_verified'] and get_setting("verification_required") == "1":
         return await render_verify(msg, is_cb=False)
     await render_main_menu(msg, is_cb=False)
+
+@dp.callback_query(F.data == "retry_verify")
+async def cb_retry_verify(cb: CallbackQuery):
+    await cb.answer()
+    await render_verify(cb, is_cb=True)
 
 # =============================================================================
 # ========================= ПОМОЩЬ ==========================================
@@ -1025,7 +1122,7 @@ async def cb_promo_enter(cb: CallbackQuery, state: FSMContext):
 @dp.callback_query(F.data == "cancel_promo")
 async def cb_cancel_promo(cb: CallbackQuery, state: FSMContext):
     await state.clear()
-    await cb.answer("❌ Отменено")
+    await cb.answer("Отменено")
     cb.data = "profile"
     await cb_profile(cb)
 
@@ -1070,7 +1167,6 @@ async def cb_history(cb: CallbackQuery):
 # ========================= ПЕРЕВОДЫ ========================================
 # =============================================================================
 
-# ✅ ИСПРАВЛЕНО: используем RE_TRANSFER
 @dp.message(F.text.regexp(RE_TRANSFER))
 async def cmd_transfer_text(msg: Message):
     if get_setting("transfer_enabled") != "1":
@@ -1082,8 +1178,8 @@ async def cmd_transfer_text(msg: Message):
     if not tid: return await msg.answer("❌ Пользователь не найден!\nФормат: <code>перевод @username 100</code>", parse_mode="HTML", reply_markup=nav_kb(is_admin(msg.from_user.id)))
     try: amount = int(amount_str)
     except: return await msg.answer("❌ Сумма — число!", reply_markup=nav_kb(is_admin(msg.from_user.id)))
-    if tid == msg.from_user.id: return await msg.answer("❌ Себе нельзя!", reply_markup=nav_kb(is_admin(msg.from_user.id)))
     if amount <= 0: return await msg.answer("❌ Сумма > 0!", reply_markup=nav_kb(is_admin(msg.from_user.id)))
+    if tid == msg.from_user.id: return await msg.answer("❌ Себе нельзя!", reply_markup=nav_kb(is_admin(msg.from_user.id)))
     u = get_user(msg.from_user.id)
     if not u or u['tcoin_balance'] < amount: return await msg.answer("❌ Недостаточно TC!", reply_markup=nav_kb(is_admin(msg.from_user.id)))
     t = get_user(tid)
@@ -1091,8 +1187,7 @@ async def cmd_transfer_text(msg: Message):
     update_balance(msg.from_user.id, tcoin=-amount, desc=f"Перевод → {tid}")
     update_balance(tid, tcoin=amount, desc=f"Перевод ← {msg.from_user.id}")
     await msg.answer(f"✅ Переведено <b>{amount} 🪙</b> → {tid}", parse_mode="HTML", reply_markup=nav_kb(is_admin(msg.from_user.id)))
-    try: await bot.send_message(tid, f"💸 Вам перевели <b>{amount} 🪙</b> от @{msg.from_user.username or msg.from_user.id}!", parse_mode="HTML")
-    except: pass
+    await safe_send(tid, f"💸 Вам перевели <b>{amount} 🪙</b> от @{msg.from_user.username or msg.from_user.id}!")
 
 @dp.message(F.text.lower() == "перевод")
 async def cmd_transfer_help(msg: Message):
@@ -1107,6 +1202,9 @@ async def cb_task_get(cb: CallbackQuery):
     await cb.answer()
     uid = cb.from_user.id
     td = await pf_get_task(uid, uid)
+    if td.get("status") == "error":
+        return await render(cb.message, "⚠️ <b>Ошибка загрузки заданий</b>\n\nПопробуйте позже.",
+                            build_keyboard([[cbtn("🔄 Повторить", "task_get", "success")], [btn_menu()]]), is_cb=True)
     if td.get("status") == "ok" and td.get("sponsors"):
         sponsors = td["sponsors"]
         available = [s for s in sponsors if not is_task_completed(uid, s["link"])]
@@ -1222,7 +1320,7 @@ async def cb_ex_tc_to_sc(cb: CallbackQuery, state: FSMContext):
 @dp.callback_query(F.data == "cancel_ex")
 async def cb_cancel_ex(cb: CallbackQuery, state: FSMContext):
     await state.clear()
-    await cb.answer("❌ Отменено")
+    await cb.answer("Отменено")
     cb.data = "exchange"
     await cb_exchange(cb, state)
 
@@ -1296,7 +1394,7 @@ async def cb_deposit(cb: CallbackQuery, state: FSMContext):
 @dp.callback_query(F.data == "cancel_deposit")
 async def cb_cancel_deposit(cb: CallbackQuery, state: FSMContext):
     await state.clear()
-    await cb.answer("❌ Отменено")
+    await cb.answer("Отменено")
     cb.data = "balance_menu"
     await cb_balance_menu(cb)
 
@@ -1331,8 +1429,7 @@ async def process_payment(msg: Message):
             update_request_status(rid, "approved")
             await msg.answer(f"✅ <b>Покупка успешна!</b>\n⭐️ +{amt} SC зачислено!", parse_mode="HTML",
                              reply_markup=nav_kb(is_admin(uid), [cbtn("💎 Ещё купить", "deposit", "success")]))
-            try: await bot.send_message(ADMIN_ID, f"💰 Покупка: {uid} → {amt} SC", parse_mode="HTML")
-            except: pass
+            await safe_send(ADMIN_ID, f"💰 Покупка: {uid} → {amt} SC")
     except Exception as e:
         logging.error(f"Payment error: {e}")
         await msg.answer("❌ Ошибка.", reply_markup=nav_kb(is_admin(msg.from_user.id)))
@@ -1354,7 +1451,7 @@ async def cb_sell_starts(cb: CallbackQuery, state: FSMContext):
             f"💵 Минимум: {mw} SC\n"
             f"💸 Комиссия: {commission}%\n"
             f"💱 Курс: 1 SC = 1 ⭐️\n"
-            f"🔢 Округление: до 5 ⭐️\n\n"
+            f"🔢 Округление: до 5 ⭐️ (вниз)\n\n"
             f"Отправьте сумму продажи:")
     await render(cb.message, text, build_keyboard([[btn_cancel("cancel_sell")]]), is_cb=True)
     await state.set_state(UserStates.waiting_withdraw_amount)
@@ -1362,7 +1459,7 @@ async def cb_sell_starts(cb: CallbackQuery, state: FSMContext):
 @dp.callback_query(F.data == "cancel_sell")
 async def cb_cancel_sell(cb: CallbackQuery, state: FSMContext):
     await state.clear()
-    await cb.answer("❌ Отменено")
+    await cb.answer("Отменено")
     cb.data = "balance_menu"
     await cb_balance_menu(cb)
 
@@ -1381,18 +1478,16 @@ async def process_sell_amount(msg: Message, state: FSMContext):
     commission = int(get_setting("sell_commission") or 3)
     payout_raw = int(amount * (100 - commission) / 100)
     payout = round_to_5(payout_raw)
-    await msg.answer(f"✅ Заявка #{rid} на продажу {amount} SC создана.\n💵 Вы получите: <b>{payout} ⭐️</b>\n💸 Комиссия: {commission}%",
+    await msg.answer(f"✅ Заявка #{rid} на продажу {amount} SC создана.\n💵 Вы получите: <b>{payout} ⭐️</b> (округлено до 5)\n💸 Комиссия: {commission}%",
                      parse_mode="HTML", reply_markup=nav_kb(False, [btn_profile()]))
-    try:
-        await bot.send_message(ADMIN_ID,
-            f"📤 Заявка на продажу #{rid}\n👤 {msg.from_user.id}\n⭐️ {amount} SC → ⭐️ {payout}\n<code>approve {rid}</code> / <code>reject {rid}</code>",
-            parse_mode="HTML")
-    except: pass
+    await safe_send(ADMIN_ID,
+        f"📤 Заявка на продажу #{rid}\n👤 {msg.from_user.id}\n⭐️ {amount} SC → ⭐️ {payout}\n<code>approve {rid}</code> / <code>reject {rid}</code>")
 
 # =============================================================================
 # ========================= ЧЕКИ ============================================
 # =============================================================================
 
+# ✅ ИСПРАВЛЕНИЕ 2: единый обработчик для создания чеков (user и admin)
 @dp.callback_query(F.data == "check_create_user")
 async def cb_check_create_user(cb: CallbackQuery, state: FSMContext):
     await cb.answer()
@@ -1410,40 +1505,47 @@ async def cb_check_create_user(cb: CallbackQuery, state: FSMContext):
 @dp.callback_query(F.data == "cancel_ck_user")
 async def cb_cancel_ck_user(cb: CallbackQuery, state: FSMContext):
     await state.clear()
-    await cb.answer("❌ Отменено")
+    await cb.answer("Отменено")
     cb.data = "balance_menu"
     await cb_balance_menu(cb)
 
+# ✅ ИСПРАВЛЕНИЕ 2: единый обработчик для SC (user и admin)
 @dp.message(UserStates.waiting_check_create_sc)
-async def proc_ck_user_sc(msg: Message, state: FSMContext):
+async def proc_ck_sc(msg: Message, state: FSMContext):
     data = await state.get_data()
-    if data.get("check_creator") != "user": return
+    creator = data.get("check_creator")
+    if creator not in ["user", "admin"]: return
     try: sc = int(msg.text.strip())
     except ValueError: return await msg.answer("❌ Число!")
     if sc < 0: return await msg.answer("❌ >= 0!")
-    u = get_user(msg.from_user.id)
-    if u['stars_balance'] < sc: return await msg.answer("❌ Недостаточно SC!")
+    if creator == "user":
+        u = get_user(msg.from_user.id)
+        if u['stars_balance'] < sc: return await msg.answer("❌ Недостаточно SC!")
     await state.update_data(check_sc=sc)
     await msg.answer("🪙 Сколько TC в чеке? (0 если не нужно)")
     await state.set_state(UserStates.waiting_check_create_tc)
 
 @dp.message(UserStates.waiting_check_create_tc)
-async def proc_ck_user_tc(msg: Message, state: FSMContext):
+async def proc_ck_tc(msg: Message, state: FSMContext):
     data = await state.get_data()
-    if data.get("check_creator") != "user": return
+    creator = data.get("check_creator")
+    if creator not in ["user", "admin"]: return
     try: tc = int(msg.text.strip())
     except ValueError: return await msg.answer("❌ Число!")
     if tc < 0: return await msg.answer("❌ >= 0!")
-    u = get_user(msg.from_user.id)
-    if u['tcoin_balance'] < tc: return await msg.answer("❌ Недостаточно TC!")
+    if creator == "user":
+        u = get_user(msg.from_user.id)
+        if u['tcoin_balance'] < tc: return await msg.answer("❌ Недостаточно TC!")
     await state.update_data(check_tc=tc)
     await msg.answer("🔢 Сколько активаций?")
     await state.set_state(UserStates.waiting_check_create_act)
 
+# ✅ ИСПРАВЛЕНИЕ 2: единый финальный обработчик
 @dp.message(UserStates.waiting_check_create_act)
-async def proc_ck_user_act(msg: Message, state: FSMContext):
+async def proc_ck_act(msg: Message, state: FSMContext):
     data = await state.get_data()
-    if data.get("check_creator") != "user": return
+    creator = data.get("check_creator")
+    if creator not in ["user", "admin"]: return
     try: act = int(msg.text.strip())
     except ValueError: return await msg.answer("❌ Число!")
     if act <= 0 or act > 1000: return await msg.answer("❌ От 1 до 1000!")
@@ -1451,9 +1553,10 @@ async def proc_ck_user_act(msg: Message, state: FSMContext):
     tc = data.get("check_tc", 0)
     if sc == 0 and tc == 0: return await msg.answer("❌ Укажите хотя бы одну валюту!")
     await state.clear()
-    u = get_user(msg.from_user.id)
-    if sc > 0: update_balance(msg.from_user.id, stars=-sc * act, desc=f"Создание чека (SC ×{act})")
-    if tc > 0: update_balance(msg.from_user.id, tcoin=-tc * act, desc=f"Создание чека (TC ×{act})")
+    # Заморозка средств (только для user)
+    if creator == "user":
+        if sc > 0: update_balance(msg.from_user.id, stars=-sc * act, desc=f"Создание чека (SC ×{act})")
+        if tc > 0: update_balance(msg.from_user.id, tcoin=-tc * act, desc=f"Создание чека (TC ×{act})")
     code = generate_code()
     if create_check(code, sc * act, tc * act, act, msg.from_user.id):
         bi = await bot.get_me()
@@ -1461,7 +1564,7 @@ async def proc_ck_user_act(msg: Message, state: FSMContext):
             f"✅ <b>Чек создан!</b>\n\n🎫 Код: <code>{code}</code>\n⭐️ {sc * act} SC | 🪙 {tc * act} TC\n🔢 Активаций: {act}\n💵 За каждую: ⭐️{sc} 🪙{tc}\n\n"
             f"<b>Ссылка для активации:</b>\n<code>https://t.me/{bi.username}?start=check_{code}</code>",
             parse_mode="HTML",
-            reply_markup=build_keyboard([[cbtn("➕ Ещё чек", "check_create_user", "success")], [btn_balance()], [btn_menu()]])
+            reply_markup=build_keyboard([[cbtn("➕ Ещё чек", "check_create_user" if creator == "user" else "check_create_admin", "success")], [btn_balance() if creator == "user" else btn_admin()], [btn_menu()]])
         )
     else:
         await msg.answer("❌ Ошибка создания чека!", reply_markup=build_keyboard([[btn_balance()], [btn_menu()]]))
@@ -1527,7 +1630,6 @@ async def cmd_games_text(msg: Message):
 # ========================= ИГРЫ ============================================
 # =============================================================================
 
-# ✅ ИСПРАВЛЕНО: используем RE_SLOTS вместо F.text.regexp(..., ignore_case=True)
 @dp.message(F.text.regexp(RE_SLOTS))
 async def g_slots(msg: Message):
     if not await game_ready(msg): return
@@ -1539,7 +1641,7 @@ async def g_slots(msg: Message):
     if not check_bal(msg.from_user.id, bet): return await msg.answer("❌ Недостаточно TC!", reply_markup=ke)
     if should_lose("slots"):
         update_balance(msg.from_user.id, tcoin=-bet, desc="Ставка: Слоты")
-        return await game_lose(msg, "Слоты", bet)
+        return await game_lose(msg, "Слоты", bet, emoji="🎰")
     update_balance(msg.from_user.id, tcoin=-bet, desc="Ставка: Слоты")
     dm = await msg.answer_dice(emoji="🎰")
     v = dm.dice.value
@@ -1561,7 +1663,7 @@ async def g_dice(msg: Message):
     if not check_bal(msg.from_user.id, bet): return await msg.answer("❌ Недостаточно!", reply_markup=ke)
     if should_lose("dice"):
         update_balance(msg.from_user.id, tcoin=-bet, desc="Ставка: Кости")
-        return await game_lose(msg, f"Кости ({mode})", bet)
+        return await game_lose(msg, f"Кости ({mode})", bet, emoji="🎲")
     update_balance(msg.from_user.id, tcoin=-bet, desc="Кости")
     dm = await msg.answer_dice(emoji="🎲")
     v = dm.dice.value
@@ -1595,7 +1697,7 @@ async def g_darts(msg: Message):
     if not check_bal(msg.from_user.id, bet): return await msg.answer("❌ Недостаточно!", reply_markup=ke)
     if should_lose("darts"):
         update_balance(msg.from_user.id, tcoin=-bet, desc="Ставка: Дротик")
-        return await game_lose(msg, f"Дротик ({event})", bet)
+        return await game_lose(msg, f"Дротик ({event})", bet, emoji="🎯")
     update_balance(msg.from_user.id, tcoin=-bet, desc="Дротик")
     dm = await msg.answer_dice(emoji="🎯")
     v = dm.dice.value
@@ -1617,7 +1719,7 @@ async def g_basket(msg: Message):
     if not check_bal(msg.from_user.id, bet): return await msg.answer("❌ Недостаточно!", reply_markup=ke)
     if should_lose("basket"):
         update_balance(msg.from_user.id, tcoin=-bet, desc="Ставка: Баскет")
-        return await game_lose(msg, f"Баскет ({event})", bet)
+        return await game_lose(msg, f"Баскет ({event})", bet, emoji="🏀")
     update_balance(msg.from_user.id, tcoin=-bet, desc="Баскет")
     dm = await msg.answer_dice(emoji="🏀")
     v = dm.dice.value
@@ -1639,7 +1741,7 @@ async def g_foot(msg: Message):
     if not check_bal(msg.from_user.id, bet): return await msg.answer("❌ Недостаточно!", reply_markup=ke)
     if should_lose("football"):
         update_balance(msg.from_user.id, tcoin=-bet, desc="Ставка: Футбол")
-        return await game_lose(msg, f"Футбол ({event})", bet)
+        return await game_lose(msg, f"Футбол ({event})", bet, emoji="⚽")
     update_balance(msg.from_user.id, tcoin=-bet, desc="Футбол")
     dm = await msg.answer_dice(emoji="⚽")
     v = dm.dice.value
@@ -1662,7 +1764,14 @@ async def g_roulette(msg: Message):
     if not check_bal(msg.from_user.id, bet): return await msg.answer("❌ Недостаточно!", reply_markup=ke)
     if should_lose("roulette"):
         update_balance(msg.from_user.id, tcoin=-bet, desc="Ставка: Рулетка")
-        return await game_lose(msg, f"Рулетка ({mode})", bet)
+        # ✅ ИСПРАВЛЕНИЕ 13: показываем фейковый результат
+        num = random.randint(0, 36)
+        reds = {1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36}
+        ce = "🟢" if num == 0 else ("🔴" if num in reds else "⚫")
+        cn = "Зеро" if num == 0 else ("Красное" if num in reds else "Чёрное")
+        kb = nav_kb(adm, [btn_games()])
+        increment_game_stat(msg.from_user.id, False)
+        return await msg.answer(f"🎡 <b>Рулетка:</b> {ce} <b>{num}</b> ({cn})\n\n😔 <b>Проигрыш</b>\n\n{random.choice(NEAR_MISS)}\n-{bet} 🪙", parse_mode="HTML", reply_markup=kb)
     update_balance(msg.from_user.id, tcoin=-bet, desc=f"Рулетка {mode}")
     num = random.randint(0, 36)
     reds = {1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36}
@@ -1720,7 +1829,11 @@ async def g_coin(msg: Message):
     if not check_bal(msg.from_user.id, bet): return await msg.answer("❌ Недостаточно!", reply_markup=ke)
     if should_lose("coin"):
         update_balance(msg.from_user.id, tcoin=-bet, desc="Ставка: Монетка")
-        return await game_lose(msg, "Монетка", bet)
+        res = random.choice(["орёл", "решка"])
+        em = "🦅" if res == "орёл" else "🪙"
+        kb = nav_kb(adm, [btn_games()])
+        increment_game_stat(msg.from_user.id, False)
+        return await msg.answer(f"{em} <b>{res.capitalize()}!</b>\n\n😔 <b>Проигрыш</b>\n\n{random.choice(NEAR_MISS)}\n-{bet} 🪙", parse_mode="HTML", reply_markup=kb)
     update_balance(msg.from_user.id, tcoin=-bet, desc="Монетка")
     res = random.choice(["орёл", "решка"])
     won = (res == "орёл") == wh
@@ -1745,7 +1858,11 @@ async def g_hilo(msg: Message):
     if not check_bal(msg.from_user.id, bet): return await msg.answer("❌ Недостаточно!", reply_markup=ke)
     if should_lose("hilo"):
         update_balance(msg.from_user.id, tcoin=-bet, desc=f"Ставка: {cmd}")
-        return await game_lose(msg, cmd.capitalize(), bet)
+        num = random.randint(1, 100)
+        kb = nav_kb(adm, [btn_games()])
+        em = "🔥" if num >= 75 else ("📈" if num >= 51 else ("❄️" if num <= 25 else "📉"))
+        increment_game_stat(msg.from_user.id, False)
+        return await msg.answer(f"{em} <b>Число: {num}</b>\n\n😔 <b>Проигрыш</b>\n\n{random.choice(NEAR_MISS)}\n-{bet} 🪙", parse_mode="HTML", reply_markup=kb)
     update_balance(msg.from_user.id, tcoin=-bet, desc=cmd)
     num = random.randint(1, 100)
     kb = nav_kb(adm, [btn_games()])
@@ -1762,6 +1879,7 @@ async def g_hilo(msg: Message):
     else:
         await msg.answer(f"{em} <b>Число: {num}</b>\n\n😔 <b>Проигрыш</b>\n\n{random.choice(NEAR_MISS)}\n-{bet} 🪙", parse_mode="HTML", reply_markup=kb)
 
+# ✅ ИСПРАВЛЕНИЕ 2, 5: исправленные мины с правильными callback_data и одним списанием
 @dp.message(F.text.regexp(RE_MINES))
 async def g_mines(msg: Message, state: FSMContext):
     if not await game_ready(msg): return
@@ -1779,12 +1897,12 @@ async def g_mines(msg: Message, state: FSMContext):
     except: return await msg.answer("❌ Мины: 1-5!", reply_markup=ke)
     if not 1 <= mc <= 5: return await msg.answer("❌ Мины: 1-5!", reply_markup=ke)
     if not check_bal(msg.from_user.id, bet): return await msg.answer("❌ Недостаточно TC!", reply_markup=ke)
+    # ✅ ИСПРАВЛЕНИЕ 5: ОДНО списание ставки
+    update_balance(msg.from_user.id, tcoin=-bet, desc=f"Ставка: Мины ({mc})")
     if should_lose("mines"):
-        update_balance(msg.from_user.id, tcoin=-bet, desc=f"Ставка: Мины ({mc})")
         mines = [0] + random.sample(range(1, 25), mc - 1) if mc > 1 else [0]
     else:
         mines = random.sample(range(25), mc)
-    update_balance(msg.from_user.id, tcoin=-bet, desc=f"Ставка: Мины ({mc})")
     await state.update_data(bet=bet, mines_count=mc, opened=[], mines=mines, multiplier=1.0)
     await state.set_state(MinesStates.playing)
     initial_msg = await msg.answer("💣 Загрузка...", reply_markup=build_keyboard([[btn_games()]]))
@@ -1808,18 +1926,19 @@ async def render_mines_grid(target, state, new_opened: int = None, game_over: bo
     mult = calc_mines_multiplier(len(opened), mines_count)
     await state.update_data(multiplier=mult)
     buttons = []
+    # ✅ ИСПРАВЛЕНИЕ 2: используем mc_ для клеток, md_ для открытых, mx_ для cashout
     for i in range(25):
         if game_over:
             if i in mines: text = "💣"
             elif i in opened: text = "⭐️"
             else: text = "⬜"
-            cd = f"mine_disabled_{i}"
+            cd = f"md_{i}"
         elif i in opened:
             text = "⭐️"
-            cd = f"mine_disabled_{i}"
+            cd = f"md_{i}"
         else:
             text = "⬜"
-            cd = f"mine_{i}"
+            cd = f"mc_{i}"
         buttons.append(InlineKeyboardButton(text=text, callback_data=cd))
     rows = [buttons[i:i+5] for i in range(0, 25, 5)]
     payout = int(bet * mult)
@@ -1834,7 +1953,7 @@ async def render_mines_grid(target, state, new_opened: int = None, game_over: bo
         text = (f"💣 <b>Мины</b>\n\n💰 Ставка: {bet} 🪙\n💣 Мин: {mines_count}\n"
                 f"⭐️ Открыто: {len(opened)}/25\n📈 Множитель: ×{mult:.2f}\n💵 Выигрыш: {payout} 🪙\n\n"
                 f"Нажмите на клетку или заберите выигрыш.")
-        rows.append([cbtn(f"💰 Забрать {payout} 🪙 (×{mult:.2f})", "mine_cashout", "success")])
+        rows.append([cbtn(f"💰 Забрать {payout} 🪙 (×{mult:.2f})", "mx_cashout", "success")])
     kb = build_keyboard(rows)
     msg = target.message if hasattr(target, 'message') else target
     try:
@@ -1843,14 +1962,17 @@ async def render_mines_grid(target, state, new_opened: int = None, game_over: bo
         if "message is not modified" not in str(e):
             logging.error(f"Mines render error: {e}")
 
-@dp.callback_query(F.data.startswith("mine_"))
+# ✅ ИСПРАВЛЕНИЕ 2: точный regex для клеток мин
+@dp.callback_query(F.data.regexp(RE_MINE_CELL))
 async def mine_click(cb: CallbackQuery, state: FSMContext):
     await cb.answer()
     current_state = await state.get_state()
     if current_state != MinesStates.playing.state:
         return await cb.answer("❌ Игра не активна", show_alert=True)
     data = await state.get_data()
-    cell = int(cb.data.split("_")[1])
+    match = RE_MINE_CELL.match(cb.data)
+    if not match: return
+    cell = int(match.group(1))
     mines = data['mines']
     opened = data['opened']
     if cell in opened:
@@ -1868,7 +1990,7 @@ async def mine_click(cb: CallbackQuery, state: FSMContext):
         await render_mines_grid(cb, state, game_over=True, lost=False)
         await state.clear()
 
-@dp.callback_query(F.data == "mine_cashout")
+@dp.callback_query(F.data == "mx_cashout")
 async def mine_cashout(cb: CallbackQuery, state: FSMContext):
     await cb.answer()
     current_state = await state.get_state()
@@ -1882,7 +2004,7 @@ async def mine_cashout(cb: CallbackQuery, state: FSMContext):
     await render_mines_grid(cb, state, game_over=True, lost=False)
     await state.clear()
 
-@dp.callback_query(F.data.startswith("mine_disabled_"))
+@dp.callback_query(F.data.regexp(RE_MINE_DISABLED))
 async def mine_disabled(cb: CallbackQuery):
     await cb.answer("⬜", show_alert=True)
 
@@ -1902,6 +2024,7 @@ async def g_crash(msg: Message):
     if should_lose("crash"):
         update_balance(msg.from_user.id, tcoin=-bet, desc=f"Ставка: Краш ×{co}")
         anim = "🚀 <b>Краш:</b>\n  💥 <b>КРАШ на ×1.0!</b>\n\n😔 Не успели.\n" + random.choice(NEAR_MISS) + f"\n-{bet} 🪙"
+        increment_game_stat(msg.from_user.id, False)
         return await msg.answer(anim, parse_mode="HTML", reply_markup=ke)
     update_balance(msg.from_user.id, tcoin=-bet, desc=f"Краш ×{co}")
     cp = round(100 / random.randint(1, 100), 2)
@@ -1914,8 +2037,10 @@ async def g_crash(msg: Message):
     if cp >= co:
         pay = int(bet * co)
         update_balance(msg.from_user.id, tcoin=pay, desc=f"Краш ×{co}")
+        increment_game_stat(msg.from_user.id, True)
         anim += f"\n💥 Краш на ×{cp}\n\n🎉 <b>Успели на ×{co}!</b>\n✅ <b>{pay} 🪙</b>"
     else:
+        increment_game_stat(msg.from_user.id, False)
         anim += f"\n💥 <b>КРАШ на ×{cp}!</b>\n\n😔 Не успели.\n{random.choice(NEAR_MISS)}\n-{bet} 🪙"
     await msg.answer(anim, parse_mode="HTML", reply_markup=kb)
 
@@ -1923,6 +2048,7 @@ async def g_crash(msg: Message):
 # ========================= АДМИН-ПАНЕЛЬ ====================================
 # =============================================================================
 
+# ✅ ИСПРАВЛЕНИЕ 8: НЕ устанавливаем state автоматически
 @dp.callback_query(F.data == "admin")
 async def cb_admin(cb: CallbackQuery, state: FSMContext):
     if not is_admin(cb.from_user.id): return await cb.answer("❌ Нет прав!", show_alert=True)
@@ -1945,7 +2071,7 @@ async def cb_admin(cb: CallbackQuery, state: FSMContext):
 @dp.callback_query(F.data == "admin_settings")
 async def cb_admin_settings(cb: CallbackQuery):
     if not is_admin(cb.from_user.id): return await cb.answer("❌ Нет прав!", show_alert=True)
-    await cb.answer()
+    # ✅ ИСПРАВЛЕНИЕ 5: убран cb.answer() — его вызовет вызывающая функция
     s = get_all_settings()
     text = "⚙️ <b>Настройки бота</b>\n\n"
     toggles = [("bot_active","🟢 Бот"),("maintenance_mode","🔧 Обслуж."),("games_enabled","🎮 Игры"),
@@ -1964,8 +2090,20 @@ async def cb_toggle(cb: CallbackQuery):
     key = cb.data.replace("toggle_", "")
     cur = get_setting(key)
     set_setting(key, "0" if cur == "1" else "1")
-    cb.data = "admin_settings"
-    await cb_admin_settings(cb)
+    # ✅ ИСПРАВЛЕНИЕ 5: перерисовываем напрямую, без повторного cb.answer()
+    s = get_all_settings()
+    text = "⚙️ <b>Настройки бота</b>\n\n"
+    toggles = [("bot_active","🟢 Бот"),("maintenance_mode","🔧 Обслуж."),("games_enabled","🎮 Игры"),
+               ("transfer_enabled","💸 Переводы"),("deposit_enabled","💎 Покупка SC"),
+               ("withdraw_enabled","💰 Продажа SC"),("verification_required","✅ Вериф.")]
+    for k, l in toggles:
+        text += f"{'✅' if s.get(k)=='1' else '❌'} {l}: <b>{'Вкл' if s.get(k)=='1' else 'Выкл'}</b>\n"
+    rows = [[cbtn(f"{'✅' if s.get(k)=='1' else '❌'} {l}", f"toggle_{k}", "success" if s.get(k)=='1' else "danger")] for k, l in toggles]
+    rows.append([cbtn("🔙 Назад", "admin", "primary")])
+    try:
+        await cb.message.edit_text(text, parse_mode="HTML", reply_markup=build_keyboard(rows))
+    except TelegramBadRequest:
+        pass
 
 @dp.callback_query(F.data == "admin_rates")
 async def cb_admin_rates(cb: CallbackQuery):
@@ -2029,9 +2167,26 @@ async def cb_set_val(cb: CallbackQuery, state: FSMContext):
 @dp.callback_query(F.data == "cancel_setting")
 async def cb_cancel_setting(cb: CallbackQuery, state: FSMContext):
     await state.clear()
-    await cb.answer("❌ Отменено")
-    cb.data = "admin_rates"
-    await cb_admin_rates(cb)
+    await cb.answer("Отменено")
+    # ✅ ИСПРАВЛЕНИЕ 5: перерисовываем напрямую
+    s = get_all_settings()
+    text = (f"💱 <b>Курсы и лимиты</b>\n\n💱 Курс: <code>{s.get('exchange_rate')}</code> TC=1SC\n"
+            f"💵 Мин. ставка: <code>{s.get('min_bet')}</code>\n💰 Макс. ставка: <code>{s.get('max_bet')}</code>")
+    keys = [("set_exchange_rate","💱 Курс TC/SC"),("set_min_bet","💵 Мин. ставка"),("set_max_bet","💰 Макс. ставка"),
+            ("set_daily_sc","🎁 Бонус ⭐️"),("set_daily_tc","🎁 Бонус 🪙"),("set_referral_bonus","👥 Реф. бонус"),
+            ("set_min_withdraw","💳 Мин. продажа"),("set_sell_commission","💸 Комиссия %"),
+            ("set_task_reward","💎 Оплата за задание"),
+            ("set_lose_slots","🎰 Шанс слоты"),("set_lose_dice","🎲 Шанс кости"),
+            ("set_lose_darts","🎯 Шанс дротик"),("set_lose_basket","🏀 Шанс баскет"),
+            ("set_lose_football","⚽ Шанс футбол"),("set_lose_roulette","🎡 Шанс рулетка"),
+            ("set_lose_coin","🪙 Шанс монетка"),("set_lose_hilo","📊 Шанс hilo"),
+            ("set_lose_mines","💣 Шанс мины"),("set_lose_crash","🚀 Шанс краш")]
+    rows = [[cbtn(l, d, "primary")] for d, l in keys]
+    rows.append([cbtn("🔙 Назад", "admin", "primary")])
+    try:
+        await cb.message.edit_text(text, parse_mode="HTML", reply_markup=build_keyboard(rows))
+    except TelegramBadRequest:
+        pass
 
 @dp.message(AdminStates.waiting_setting_value)
 async def proc_setting(msg: Message, state: FSMContext):
@@ -2050,21 +2205,35 @@ async def proc_setting(msg: Message, state: FSMContext):
 
 # ==================== ЮЗЕРЫ ====================
 
+# ✅ ИСПРАВЛЕНИЕ 8: НЕ устанавливаем state автоматически
 @dp.callback_query(F.data == "admin_users")
 async def cb_admin_users(cb: CallbackQuery, state: FSMContext):
     if not is_admin(cb.from_user.id): return await cb.answer("❌ Нет прав!", show_alert=True)
     await cb.answer()
     await state.clear()
-    await render(cb.message, "👥 <b>Управление юзерами</b>\n\nОтправьте ID или @username:",
-                 build_keyboard([[btn_cancel("cancel_ua")], [cbtn("🔙 Назад", "admin", "primary")]]), is_cb=True)
-    await state.set_state(AdminStates.waiting_user_id)
+    await render(cb.message, "👥 <b>Управление юзерами</b>\n\nНажмите 🔍 Поиск или отправьте ID/username:",
+                 build_keyboard([
+                     [cbtn("🔍 Поиск", "admin_users_search", "success")],
+                     [btn_cancel("cancel_ua")],
+                     [cbtn("🔙 Назад", "admin", "primary")]
+                 ]), is_cb=True)
 
 @dp.callback_query(F.data == "cancel_ua")
 async def cb_cancel_ua(cb: CallbackQuery, state: FSMContext):
     await state.clear()
-    await cb.answer("❌ Отменено")
+    await cb.answer("Отменено")
     cb.data = "admin"
     await cb_admin(cb, state)
+
+# ✅ ИСПРАВЛЕНИЕ 8: state устанавливается только при явном поиске
+@dp.callback_query(F.data == "admin_users_search")
+async def cb_ua_search(cb: CallbackQuery, state: FSMContext):
+    if not is_admin(cb.from_user.id): return
+    await cb.answer()
+    await state.clear()
+    await state.set_state(AdminStates.waiting_user_id)
+    await cb.message.edit_text("🔍 Отправьте ID или @username:",
+                               reply_markup=build_keyboard([[btn_cancel("cancel_ua")]]))
 
 @dp.message(AdminStates.waiting_user_id)
 async def proc_uid(msg: Message, state: FSMContext):
@@ -2081,15 +2250,6 @@ async def proc_uid(msg: Message, state: FSMContext):
         [cbtn("✅ Разбан", f"ua_ub_{tid}", "success"), cbtn("👑 Админ", f"ua_adm_{tid}", "primary")],
         [cbtn("🔍 Другой", "admin_users_search", "primary")], [btn_admin()], [btn_menu()]])
     await msg.answer(text, parse_mode="HTML", reply_markup=kb)
-
-@dp.callback_query(F.data == "admin_users_search")
-async def cb_ua_search(cb: CallbackQuery, state: FSMContext):
-    if not is_admin(cb.from_user.id): return
-    await cb.answer()
-    await state.clear()
-    await state.set_state(AdminStates.waiting_user_id)
-    await cb.message.edit_text("🔍 Отправьте ID или @username:",
-                               reply_markup=build_keyboard([[btn_cancel("cancel_ua")]]))
 
 @dp.callback_query(F.data.startswith("ua_as_"))
 async def cb_ua_as(cb: CallbackQuery, state: FSMContext):
@@ -2116,7 +2276,7 @@ async def cb_ua_at(cb: CallbackQuery, state: FSMContext):
 @dp.callback_query(F.data == "cancel_amt")
 async def cb_cancel_amt(cb: CallbackQuery, state: FSMContext):
     await state.clear()
-    await cb.answer("❌ Отменено")
+    await cb.answer("Отменено")
     cb.data = "admin"
     await cb_admin(cb, state)
 
@@ -2201,7 +2361,7 @@ async def cb_pc(cb: CallbackQuery, state: FSMContext):
 @dp.callback_query(F.data == "cancel_pa")
 async def cb_cancel_pa(cb: CallbackQuery, state: FSMContext):
     await state.clear()
-    await cb.answer("❌ Отменено")
+    await cb.answer("Отменено")
     cb.data = "admin_promos"
     await cb_admin_promos(cb)
 
@@ -2253,16 +2413,28 @@ async def cb_pd(cb: CallbackQuery, state: FSMContext):
     await cb.answer()
     await state.clear()
     await state.set_state(AdminStates.waiting_promo_delete)
+    await state.update_data(delete_type="promo")  # ✅ ИСПРАВЛЕНИЕ 3
     await cb.message.edit_text("🗑 Код промокода для удаления:", reply_markup=build_keyboard([[btn_cancel("cancel_pa")]]))
 
+# ✅ ИСПРАВЛЕНИЕ 3: проверка delete_type
 @dp.message(AdminStates.waiting_promo_delete)
 async def proc_pd(msg: Message, state: FSMContext):
     if not is_admin(msg.from_user.id): return
+    data = await state.get_data()
+    delete_type = data.get("delete_type", "promo")
     await state.clear()
     code = msg.text.strip().upper()
-    kb = build_keyboard([[cbtn("🎟 К промокодам", "admin_promos", "primary")], [btn_admin()], [btn_menu()]])
-    if delete_promo(code): await msg.answer(f"✅ <code>{code}</code> удалён!", parse_mode="HTML", reply_markup=kb)
-    else: await msg.answer(f"❌ <code>{code}</code> не найден!", parse_mode="HTML", reply_markup=kb)
+    kb = build_keyboard([[cbtn("🎟 К промокодам", "admin_promos", "primary")], [cbtn("🎫 К чекам", "admin_checks", "primary")], [btn_admin()], [btn_menu()]])
+    if delete_type == "check":
+        if delete_check(code):
+            await msg.answer(f"✅ Чек <code>{code}</code> удалён!", parse_mode="HTML", reply_markup=kb)
+        else:
+            await msg.answer(f"❌ Чек <code>{code}</code> не найден!", parse_mode="HTML", reply_markup=kb)
+    else:
+        if delete_promo(code):
+            await msg.answer(f"✅ Промокод <code>{code}</code> удалён!", parse_mode="HTML", reply_markup=kb)
+        else:
+            await msg.answer(f"❌ Промокод <code>{code}</code> не найден!", parse_mode="HTML", reply_markup=kb)
 
 # ==================== ЧЕКИ АДМИН ====================
 
@@ -2299,7 +2471,7 @@ async def cb_check_create_admin(cb: CallbackQuery, state: FSMContext):
 @dp.callback_query(F.data == "cancel_ck_admin")
 async def cb_cancel_ck_admin(cb: CallbackQuery, state: FSMContext):
     await state.clear()
-    await cb.answer("❌ Отменено")
+    await cb.answer("Отменено")
     cb.data = "admin_checks"
     await cb_admin_checks(cb)
 
@@ -2309,6 +2481,7 @@ async def cb_check_delete_admin(cb: CallbackQuery, state: FSMContext):
     await cb.answer()
     await state.clear()
     await state.set_state(AdminStates.waiting_promo_delete)
+    # ✅ ИСПРАВЛЕНИЕ 3: сохраняем delete_type="check"
     await state.update_data(delete_type="check")
     await cb.message.edit_text("🗑 Код чека для удаления:", reply_markup=build_keyboard([[btn_cancel("cancel_ck_admin")]]))
 
@@ -2340,7 +2513,7 @@ async def cb_ab(cb: CallbackQuery, state: FSMContext):
 @dp.callback_query(F.data == "cancel_bc")
 async def cb_cancel_bc(cb: CallbackQuery, state: FSMContext):
     await state.clear()
-    await cb.answer("❌ Отменено")
+    await cb.answer("Отменено")
     cb.data = "admin"
     await cb_admin(cb, state)
 
@@ -2356,6 +2529,8 @@ async def proc_bc(msg: Message, state: FSMContext):
     ok = fail = 0
     for uid in users:
         try: await bot.send_message(uid, st); ok += 1; await asyncio.sleep(0.05)
+        except TelegramForbiddenError:
+            fail += 1
         except: fail += 1
     await sm.edit_text(f"✅ Рассылка: {ok} ок, {fail} ошибок",
                        reply_markup=build_keyboard([[cbtn("📢 Ещё рассылка", "admin_broadcast", "success")], [btn_admin()], [btn_menu()]]))
@@ -2364,7 +2539,6 @@ async def proc_bc(msg: Message, state: FSMContext):
 # ========================= ТЕКСТОВЫЕ АДМИН-КОМАНДЫ =========================
 # =============================================================================
 
-# ✅ ИСПРАВЛЕНО: используем RE_ADMIN_CMD
 @dp.message(F.text.regexp(RE_ADMIN_CMD))
 async def admin_cmds_text(msg: Message):
     if not is_admin(msg.from_user.id): return
@@ -2461,15 +2635,13 @@ async def admin_cmds_text(msg: Message):
         if cmd == "approve":
             update_request_status(rid, "approved")
             await msg.answer(f"✅ #{rid} одобрена.", reply_markup=kb)
-            try: await bot.send_message(req['user_id'], f"✅ Заявка #{rid} одобрена!")
-            except: pass
+            await safe_send(req['user_id'], f"✅ Заявка #{rid} одобрена!")
         else:
             update_request_status(rid, "rejected")
             if req['req_type'] == "sell_starts":
                 update_balance(req['user_id'], stars=req['amount'], desc="Возврат SC (заявка отклонена)")
             await msg.answer(f"❌ #{rid} отклонена.", reply_markup=kb)
-            try: await bot.send_message(req['user_id'], f"❌ Заявка #{rid} отклонена.")
-            except: pass
+            await safe_send(req['user_id'], f"❌ Заявка #{rid} отклонена.")
 
 # =============================================================================
 # ========================= НАЗАД ===========================================
