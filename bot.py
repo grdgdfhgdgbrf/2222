@@ -29,7 +29,7 @@ from aiogram.exceptions import TelegramBadRequest
 # ========================= КОНФИГУРАЦИЯ ====================================
 # =============================================================================
 
-BOT_TOKEN = "ВАШ_ТОКЕН_TELEGRAM_БОТА"
+BOT_TOKEN = "8684125903:AAGlja8nj_r3HCb8aZwubOqJ_MAGDFAWCoc"
 PIARFLOW_API_KEY = "MSnWP-9zGC1ZProz_dUSrj5TqeQ--khK"
 PIARFLOW_BASE_URL = "https://piarflow.com/v1"
 ADMIN_ID = 5356400377
