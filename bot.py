@@ -6,7 +6,7 @@ from aiogram.filters import CommandStart
 # Токен от @BotFather
 BOT_TOKEN = "8996813076:AAEPRaOZ8O6WoIagzMUdnV49K2zP293vyDg"
 # Username бота БЕЗ символа @ (например, "my_super_bot")
-BOT_USERNAME = "prodvrobot"
+BOT_USERNAME = "tntgame_chatbot"
 
 async def main():
     logging.basicConfig(level=logging.INFO)
