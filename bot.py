@@ -4,7 +4,7 @@ from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import CommandStart
 
 # Токен от @BotFather
-BOT_TOKEN = "8996813076:AAEPRaOZ8O6WoIagzMUdnV49K2zP293vyDg"
+BOT_TOKEN = "8684125903:AAGlja8nj_r3HCb8aZwubOqJ_MAGDFAWCoc"
 # Username бота БЕЗ символа @ (например, "my_super_bot")
 BOT_USERNAME = "tntgame_chatbot"
 
