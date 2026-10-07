@@ -259,7 +259,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     """Запуск бота"""
     # Создаем приложение
-    application = Application.builder().token("8684125903:AAGlja8nj_r3HCb8aZwubOqJ_MAGDFAWCo").build()
+    application = Application.builder().token("8684125903:AAGlja8nj_r3HCb8aZwubOqJ_MAGDFAWCoc").build()
     
     # Создаем обработчик диалога
     conv_handler = ConversationHandler(
