@@ -27,7 +27,7 @@ client = OpenAI(
 )
 
 # Состояния диалога
-AUTHOR, GRADE, PART, PAGE, NUMBER, PHOTO = range(6)
+SUBJECT, AUTHOR, GRADE, PART, PAGE, NUMBER, PHOTO = range(7)
 
 # Хранилище данных пользователей
 user_data = {}
@@ -48,7 +48,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Как ты хочешь найти решение?",
         reply_markup=reply_markup
     )
-    return AUTHOR
+    return SUBJECT
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка кнопок"""
@@ -59,11 +59,18 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_data[user_id] = {}
     
     if query.data == "manual":
-        await query.edit_message_text("📚 Введи автора учебника:")
-        return AUTHOR
+        await query.edit_message_text("📚 Введи предмет (например: математика, русский язык, физика):")
+        return SUBJECT
     elif query.data == "photo":
         await query.edit_message_text("📷 Отправь фото задания:")
         return PHOTO
+
+async def get_subject(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Получение предмета"""
+    user_id = update.effective_user.id
+    user_data[user_id]['subject'] = update.message.text
+    await update.message.reply_text("✍️ Введи автора учебника:")
+    return AUTHOR
 
 async def get_author(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Получение автора"""
@@ -103,6 +110,7 @@ async def get_number(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Формируем запрос к DeepSeek
     data = user_data[user_id]
     prompt = f"""Найди готовое домашнее задание (ГДЗ) с подробным решением.
+Предмет: {data['subject']}
 Автор: {data['author']}
 Класс: {data['grade']}
 Часть: {data['part']}
@@ -164,7 +172,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "content": [
                         {
                             "type": "text",
-                            "text": "Определи задание на этом изображении и предоставь подробное решение с объяснением каждого шага. Если это задача из учебника, укажи автора, класс и номер задания если возможно."
+                            "text": "Определи задание на этом изображении и предоставь подробное решение с объяснением каждого шага. Если это задача из учебника, укажи предмет, автора, класс и номер задания если возможно."
                         },
                         {
                             "type": "image_url",
@@ -217,7 +225,7 @@ async def restart(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Как ты хочешь найти решение?",
         reply_markup=reply_markup
     )
-    return AUTHOR
+    return SUBJECT
 
 async def end(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Завершение работы"""
@@ -241,7 +249,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "📚 *Помощь по использованию бота:*\n\n"
         "1️⃣ Используй /start чтобы начать\n"
         "2️⃣ Выбери способ поиска:\n"
-        "   • 📝 Ввод данных вручную (автор, класс, часть, страница, номер)\n"
+        "   • 📝 Ввод данных вручную (предмет, автор, класс, часть, страница, номер)\n"
         "   • 📷 Загрузка фото задания\n"
         "3️⃣ Получи подробное решение\n\n"
         "Используй /cancel чтобы отменить текущий диалог",
@@ -257,10 +265,11 @@ def main():
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('start', start)],
         states={
-            AUTHOR: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, get_author),
+            SUBJECT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, get_subject),
                 CallbackQueryHandler(button_handler)
             ],
+            AUTHOR: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_author)],
             GRADE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_grade)],
             PART: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_part)],
             PAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_page)],
