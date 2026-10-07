@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 # DeepSeek API клиент
 client = OpenAI(
-    api_key="sk-37c63ff3d8994af0a9ad42f98ae3e0aa",
+    api_key="sk-c9c29cf3cd1d446aa5a13a7c62ba6ddb",
     base_url="https://api.deepseek.com"
 )
 
